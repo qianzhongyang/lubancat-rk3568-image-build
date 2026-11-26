@@ -89,24 +89,26 @@ prepare_ubuntu_dir() {
   fi
 
   # ① sources.list: jammy → noble
-  if grep -q '\bjammy\b' "$dst/sources.list" 2>/dev/null; then
-    sed -i 's/\bjammy\b/noble/g' "$dst/sources.list"
+  if grep -q 'jammy' "$dst/sources.list" 2>/dev/null; then
+    sed -i 's/jammy/noble/g' "$dst/sources.list"
     info "已改 sources.list: jammy → noble"
   fi
 
   # ② mk-base-ubuntu.sh: 基础 rootfs 版本号与下载地址
   local mkb="$dst/mk-base-ubuntu.sh"
   if [ -f "$mkb" ] && grep -q 'ubuntu-base-22\.04' "$mkb"; then
-    sed -i 's|ubuntu-base-22\.04\.5-base-|ubuntu-base-24.04.5-base-|g; \
-            s|releases/22\.04/release|releases/24.04/release|g' "$mkb"
+    # 两条规则必须分成两个 -e：单引号内用 \ 续行会被 sed 当作正则的一部分，
+    # 报 “未终止的地址正则表达式”。
+    sed -i -e 's|ubuntu-base-22\.04\.5-base-|ubuntu-base-24.04.5-base-|g' \
+           -e 's|releases/22\.04/release|releases/24.04/release|g' "$mkb"
     info "已改 mk-base-ubuntu.sh: ubuntu-base 22.04.5 → 24.04.5"
   fi
 
   # ③ readme.md 的版本描述（纯文本）
   local rd="$dst/readme.md"
   if [ -f "$rd" ]; then
-    sed -i 's|ubuntu 22\.04 (Jammy-X11)|ubuntu 24.04 (Noble-X11)|; \
-            s|## 构建 Ubuntu22\.04镜像|## 构建 Ubuntu24.04镜像|' "$rd"
+    sed -i -e 's|ubuntu 22\.04 (Jammy-X11)|ubuntu 24.04 (Noble-X11)|' \
+           -e 's|## 构建 Ubuntu22\.04镜像|## 构建 Ubuntu24.04镜像|' "$rd"
   fi
 
   # 语法自检：改坏了要在这里发现，而不是等 60 分钟后编译失败

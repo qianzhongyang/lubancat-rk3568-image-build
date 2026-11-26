@@ -996,10 +996,14 @@ deb http://mirrors.aliyun.com/ubuntu-ports/ noble-updates main multiverse restri
 
 ```bash
 cd ~/LubanCat_SDK/ubuntu24.04
-sed -i 's|ubuntu-base-22\.04\.5-base-|ubuntu-base-24.04.5-base-|g; \
-        s|releases/22\.04/release|releases/24.04/release|g' mk-base-ubuntu.sh
+sed -i -e 's|ubuntu-base-22\.04\.5-base-|ubuntu-base-24.04.5-base-|g' \
+       -e 's|releases/22\.04/release|releases/24.04/release|g' mk-base-ubuntu.sh
 grep -n 'ubuntu-base-24' mk-base-ubuntu.sh
 ```
+
+> ⚠️ **两条替换规则必须写成两个 `-e`**，不要用 `'s|a|b|g; \` + 换行 +
+> `s|c|d|g'` 这种单引号内续行的写法。单引号里的 `\` 换行会被 `sed` 当成
+> 正则的一部分，导致 `sed: -e 表达式 #1: 未终止的地址正则表达式`。
 
 期望四行全部指向 24.04：
 
@@ -1022,8 +1026,8 @@ curl -sI http://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-bas
 **③ `readme.md` 里的版本描述**（纯文本，不影响编译，改了更清楚）
 
 ```bash
-sed -i 's|ubuntu 22\.04 (Jammy-X11)|ubuntu 24.04 (Noble-X11)|; \
-        s|## 构建 Ubuntu22\.04镜像|## 构建 Ubuntu24.04镜像|' readme.md
+sed -i -e 's|ubuntu 22\.04 (Jammy-X11)|ubuntu 24.04 (Noble-X11)|' \
+       -e 's|## 构建 Ubuntu22\.04镜像|## 构建 Ubuntu24.04镜像|' readme.md
 ```
 
 改完检查语法，确保没把脚本改坏：
@@ -2082,8 +2086,9 @@ grep RK_UBUNTU_VERSION ~/LubanCat_SDK/output/.config   # 应为 noble
        rsync -a --exclude binary --exclude '*.tar.gz' --exclude '*.img' \
          ubuntu22.04/ ubuntu24.04/
        sed -i 's/\bjammy\b/noble/g' ubuntu24.04/sources.list
-       sed -i 's|ubuntu-base-22\.04\.5-base-|ubuntu-base-24.04.5-base-|g; \
-              s|releases/22\.04/release|releases/24.04/release|g' ubuntu24.04/mk-base-ubuntu.sh
+       sed -i -e 's|ubuntu-base-22\.04\.5-base-|ubuntu-base-24.04.5-base-|g' \
+              -e 's|releases/22\.04/release|releases/24.04/release|g' \
+              ubuntu24.04/mk-base-ubuntu.sh
        for f in mk-base-ubuntu.sh mk-image.sh mk-ubuntu-rootfs.sh; do
          bash -n ubuntu24.04/$f || echo "$f 语法错误"; done
 □  9. 改 defconfig：关 FOCAL/JAMMY，开 NOBLE
@@ -2148,8 +2153,8 @@ repo init --depth=1 \
 rsync -a --exclude binary --exclude '*.tar.gz' --exclude '*.img' \
   ubuntu22.04/ ubuntu24.04/
 sed -i 's/\bjammy\b/noble/g' ubuntu24.04/sources.list
-sed -i 's|ubuntu-base-22\.04\.5-base-|ubuntu-base-24.04.5-base-|g; \
-        s|releases/22\.04/release|releases/24.04/release|g' ubuntu24.04/mk-base-ubuntu.sh
+sed -i -e 's|ubuntu-base-22\.04\.5-base-|ubuntu-base-24.04.5-base-|g' \
+       -e 's|releases/22\.04/release|releases/24.04/release|g' ubuntu24.04/mk-base-ubuntu.sh
 for f in mk-base-ubuntu.sh mk-image.sh mk-ubuntu-rootfs.sh; do
   bash -n ubuntu24.04/$f || echo "!! $f 语法错误"
 done
