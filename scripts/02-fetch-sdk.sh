@@ -116,4 +116,4 @@ fi
 info "SDK 拉取完成"
 ls -1 | head -20
 echo
-info "下一步：按 README 对应分支继续（见 docs 或分支 README）"
+info "下一步：scripts/03-build-ubuntu22.sh"
