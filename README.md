@@ -1057,6 +1057,18 @@ HOST_EXTRACFLAGS="-Wno-implicit-int" ./build.sh menuconfig
 > （`dialog.h` 里 `WINDOW_HEIGTH_MIN 19` / `WINDOW_WIDTH_MIN 80`），
 > 跟配置无关，什么都不改。把终端面板拉高，或改用独立的 SSH 终端即可。
 
+> ✅ **退出菜单后立刻复核**（两种方式都要做，细节见 7.4.1）：
+>
+> ```bash
+> cd ~/LubanCat_SDK
+> grep -E '^RK_UBUNTU_(FOCAL|JAMMY|NOBLE)=y|^# RK_UBUNTU_(FOCAL|JAMMY|NOBLE) is not set' \
+>   device/rockchip/.chips/rk3566_rk3568/LubanCat_rk3568_ubuntu_xfce_defconfig
+> ```
+>
+> 只看一件事：**有没有 `RK_UBUNTU_NOBLE=y`**。
+> 有就是成了；没有说明按了 `<Exit>` 却没确认保存，重进再选一次。
+> `FOCAL` / `JAMMY` 显示成 `is not set`、或者整行不存在，都算正常（见 7.4.1 的说明）。
+
 **方式二：直接改文件（推荐，可脚本化）**
 
 ```bash
@@ -1086,29 +1098,44 @@ grep -E '^RK_UBUNTU_(FOCAL|JAMMY|NOBLE)=' $CFG
 grep -E '^# RK_UBUNTU_(FOCAL|JAMMY|NOBLE) is not set' $CFG
 ```
 
-期望**恰好**出现这三行（顺序可能不同）：
+关键只有一点：**`RK_UBUNTU_NOBLE=y` 必须存在，且必须是唯一的 `=y`。**
+被关掉的项显示成 `is not set` 或者干脆不存在，**两者都算正常**：
 
 ```
 RK_UBUNTU_NOBLE=y
-# RK_UBUNTU_FOCAL is not set
-# RK_UBUNTU_JAMMY is not set
+# RK_UBUNTU_JAMMY is not set        ← 有这行，正常
+# （FOCAL 那行可能被整行删掉了）      ← 没有这行，也正常
 ```
+
+> 为什么 `FOCAL` 可能整行消失：Kconfig 的 `savedefconfig` 只会保留「非默认值」，
+> 而 choice 的默认项不写出来。所以别去数一共有几行，`grep -c` 对着 `is not set` 数会误判。
 
 判定要点：
 
 | 检查 | 期望 | 不符说明 |
 | --- | --- | --- |
-| `RK_UBUNTU_NOBLE=y` | 有且仅有一行 | 没有 → 改没生效；多于一行 → choice 冲突 |
-| `FOCAL` / `JAMMY` | 都是 `is not set` | 有任何一个为 `=y` → 会产生两个版本定义 |
+| `RK_UBUNTU_NOBLE=y` | 有且仅有 1 行 | 0 行 → 改没生效；≥2 行 → choice 冲突 |
+| `FOCAL` / `JAMMY` 的 `=y` | 都是 0 行 | 出现任何一行 `=y` → 会出现两个版本定义 |
 
-一条命令直接给结论：
+一条命令直接给结论（只校验 `=y`，不管 `is not set`）：
 
 ```bash
 CNT=$(grep -cE '^RK_UBUNTU_(FOCAL|JAMMY|NOBLE)=y' $CFG)
 NOBLE=$(grep -c '^RK_UBUNTU_NOBLE=y' $CFG)
-[ "$CNT" = 1 ] && [ "$NOBLE" = 1 ] \
-  && echo "✅ defconfig 正确" \
-  || echo "❌ defconfig 异常：=y 共 $CNT 行，其中 NOBLE 有 $NOBLE 行"
+if [ "$CNT" = 1 ] && [ "$NOBLE" = 1 ]; then
+  echo "✅ defconfig 正确（唯一的 =y 就是 NOBLE）"
+else
+  echo "❌ defconfig 异常：=y 共 $CNT 行，其中 NOBLE 有 $NOBLE 行"
+  grep -nE '^RK_UBUNTU_(FOCAL|JAMMY|NOBLE)=y' $CFG
+fi
+```
+
+实测通过的样子（本机真实输出）：
+
+```
+RK_UBUNTU_NOBLE=y
+# RK_UBUNTU_JAMMY is not set
+✅ defconfig 正确（唯一的 =y 就是 NOBLE）
 ```
 
 > 这里只是改了 **defconfig 源文件**，`output/.config` 还是旧的。
