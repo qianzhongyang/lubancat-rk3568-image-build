@@ -1052,6 +1052,11 @@ HOST_EXTRACFLAGS="-Wno-implicit-int" ./build.sh menuconfig
 > `HOST_EXTRACFLAGS` 是避开 GCC 15 的 ncurses 误报，原因见 **3.3**。
 > 如果你的 GCC 是 14 及以前，可以去掉这个前缀直接跑。
 
+> ⚠️ **终端窗口至少要 19 行 × 80 列**，否则 `menuconfig` 会在进界面之前直接退出，
+> 报 `Your display is too small to run Menuconfig!`。这是 ncurses 的硬性检查
+> （`dialog.h` 里 `WINDOW_HEIGTH_MIN 19` / `WINDOW_WIDTH_MIN 80`），
+> 跟配置无关，什么都不改。把终端面板拉高，或改用独立的 SSH 终端即可。
+
 **方式二：直接改文件（推荐，可脚本化）**
 
 ```bash
@@ -1066,6 +1071,49 @@ sed -i '1i RK_UBUNTU_NOBLE=y' $CFG
 # 必须只有一行 =y
 grep -cE '^RK_UBUNTU_(FOCAL|JAMMY|NOBLE)=y' $CFG     # 期望输出 1
 ```
+
+### 7.4.1 立刻复核：改动到底生效没有
+
+**两种方式做完都要跑这一段。** `menuconfig` 保存后可能静默失败，
+`sed` 改文件也可能因为写法或路径不对而什么都没改——都必须用文件内容来验证，别信界面。
+
+```bash
+cd ~/LubanCat_SDK
+CFG=device/rockchip/.chips/rk3566_rk3568/LubanCat_rk3568_ubuntu_xfce_defconfig
+
+echo "===== 1) defconfig 里的 choice ====="
+grep -E '^RK_UBUNTU_(FOCAL|JAMMY|NOBLE)=' $CFG
+grep -E '^# RK_UBUNTU_(FOCAL|JAMMY|NOBLE) is not set' $CFG
+```
+
+期望**恰好**出现这三行（顺序可能不同）：
+
+```
+RK_UBUNTU_NOBLE=y
+# RK_UBUNTU_FOCAL is not set
+# RK_UBUNTU_JAMMY is not set
+```
+
+判定要点：
+
+| 检查 | 期望 | 不符说明 |
+| --- | --- | --- |
+| `RK_UBUNTU_NOBLE=y` | 有且仅有一行 | 没有 → 改没生效；多于一行 → choice 冲突 |
+| `FOCAL` / `JAMMY` | 都是 `is not set` | 有任何一个为 `=y` → 会产生两个版本定义 |
+
+一条命令直接给结论：
+
+```bash
+CNT=$(grep -cE '^RK_UBUNTU_(FOCAL|JAMMY|NOBLE)=y' $CFG)
+NOBLE=$(grep -c '^RK_UBUNTU_NOBLE=y' $CFG)
+[ "$CNT" = 1 ] && [ "$NOBLE" = 1 ] \
+  && echo "✅ defconfig 正确" \
+  || echo "❌ defconfig 异常：=y 共 $CNT 行，其中 NOBLE 有 $NOBLE 行"
+```
+
+> 这里只是改了 **defconfig 源文件**，`output/.config` 还是旧的。
+> 真正让改动进入编译流程，必须做 **7.5** 的清缓存 + 重新生成，
+> 然后再复核一次 `output/.config`（7.5 末尾有对应的检查命令）。
 
 ### 7.5 最容易踩的坑：`output/.config` 不会自动刷新
 
@@ -1096,11 +1144,62 @@ RK_UBUNTU_NUMBER="ubuntu24.04"
 RK_UBUNTU_NOBLE=y
 ```
 
-> 最后再确认一遍目标目录存在，这是本方案和 22.04 教程唯一的结构性差别：
->
-> ```bash
-> ls -d ~/LubanCat_SDK/$(grep -oP '(?<=RK_UBUNTU_NUMBER=")[^"]+' output/.config)
-> ```
+### 7.6 编译前总检查（一条命令给结论）
+
+前面 7.1~7.5 都是分步做的，容易漏。**编译前务必跑一遍这个总检查**，
+它会一次性验证「配置 + 目录 + 脚本」三件套是否都到位。
+
+```bash
+cd ~/LubanCat_SDK
+
+VER=$(grep -oP '(?<=RK_UBUNTU_VERSION=")[^"]+' output/.config 2>/dev/null)
+NUM=$(grep -oP '(?<=RK_UBUNTU_NUMBER=")[^"]+'  output/.config 2>/dev/null)
+CH=$(grep -cE '^RK_UBUNTU_(FOCAL|JAMMY|NOBLE)=y' output/.config 2>/dev/null)
+NBL=$(grep -c '^RK_UBUNTU_NOBLE=y' output/.config 2>/dev/null)
+
+echo "版本代号 : ${VER:-<空>}"
+echo "目录名   : ${NUM:-<空>}"
+echo "choice 数: ${CH:-0}（应为 1）"
+
+rc=0
+[ "$VER" = "noble" ]      || { echo "❌ output/.config 的 VERSION 不是 noble";  rc=1; }
+[ "$NUM" = "ubuntu24.04" ] || { echo "❌ output/.config 的 NUMBER 不是 ubuntu24.04"; rc=1; }
+[ "${CH:-0}" = 1 ]        || { echo "❌ choice 数量异常（$CH），应为 1";        rc=1; }
+[ "${NBL:-0}" = 1 ]       || { echo "❌ RK_UBUNTU_NOBLE=y 不在或出现多次";      rc=1; }
+[ -d "${NUM:-none}" ]     || { echo "❌ 目录 $NUM 不存在（回第七章 7.2 补齐）";  rc=1; }
+[ -f "$NUM/mk-base-ubuntu.sh" ] || { echo "❌ $NUM/mk-base-ubuntu.sh 缺失";     rc=1; }
+grep -q 'ubuntu-base-24\.04' "$NUM/mk-base-ubuntu.sh" 2>/dev/null \
+  || { echo "❌ mk-base-ubuntu.sh 的版本号没改成 24.04"; rc=1; }
+grep -q 'noble' "$NUM/sources.list" 2>/dev/null \
+  || { echo "❌ sources.list 里没有 noble";             rc=1; }
+for f in mk-base-ubuntu.sh mk-image.sh mk-ubuntu-rootfs.sh ch-mount.sh; do
+  [ -f "$NUM/$f" ] || continue
+  bash -n "$NUM/$f" 2>/dev/null || { echo "❌ $f 语法有误"; rc=1; }
+done
+
+[ $rc = 0 ] && echo "✅ 全部就绪，可以开始编译（第八章）" || echo "⚠️ 上面有未通过项，先修好再编译"
+```
+
+全部通过时的输出：
+
+```
+版本代号 : noble
+目录名   : ubuntu24.04
+choice 数: 1（应为 1）
+✅ 全部就绪，可以开始编译（第八章）
+```
+
+**这一步的价值**：24.04 的 rootfs 编译要 60~90 分钟。如果 `output/.config` 还停在
+`focal`，或者 `ubuntu24.04/` 目录没补齐，编译会在 `cd ubuntu24.04` 那一行直接失败，
+或者更糟——静默编出一个 22.04 的镜像。花 10 秒跑这段，能省掉一小时白等。
+
+| 检查项 | 对应章节 | 漏了会怎样 |
+| --- | --- | --- |
+| `output/.config` 是 noble | 7.5 | 编出来的不是 24.04，白等一小时 |
+| `ubuntu24.04/` 目录存在 | 7.2 | `cd` 失败，编译立刻中断 |
+| `mk-base-ubuntu.sh` 指向 24.04 | 7.3 | 下载错版本的基础包（或 404） |
+| `sources.list` 含 noble | 7.3 | chroot 里 apt 装 22.04 的包，版本混乱 |
+| 四个脚本语法正确 | 7.3 | 跑到中途才报语法错误 |
 
 ---
 
