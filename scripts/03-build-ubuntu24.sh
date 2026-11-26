@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# 选择 RK3568（鲁班猫2）板级配置 → 切换 rootfs 为 Ubuntu 22.04 → 编译
+# 选择 RK3568（鲁班猫2）板级配置 → 切换 rootfs 为 Ubuntu 24.04 → 编译
 #
 # 用法：
-#   ./03-build-ubuntu22.sh                        # XFCE 桌面版 + 6.1 内核，分步编译
-#   DESKTOP=lite ./03-build-ubuntu22.sh           # 无桌面版
-#   KERNEL=5.10  ./03-build-ubuntu22.sh           # 指定 5.10 内核
-#   JOBS=24      ./03-build-ubuntu22.sh           # 并行度
-#   DO_BUILD=0   ./03-build-ubuntu22.sh           # 只改配置不编译
-#   MODE=all     ./03-build-ubuntu22.sh           # 一次跑完（等价 ./build.sh）
+#   ./03-build-ubuntu24.sh                        # XFCE 桌面版 + 6.1 内核，分步编译
+#   DESKTOP=lite ./03-build-ubuntu24.sh           # 无桌面版
+#   KERNEL=5.10  ./03-build-ubuntu24.sh           # 指定 5.10 内核
+#   JOBS=24      ./03-build-ubuntu24.sh           # 并行度
+#   DO_BUILD=0   ./03-build-ubuntu24.sh           # 只改配置不编译
+#   MODE=all     ./03-build-ubuntu24.sh           # 一次跑完（等价 ./build.sh）
 #
 # 注意：`./build.sh ubuntu` 内部需要 sudo（mount/chroot/mkfs），
 #      请在有 TTY 的终端里运行，否则会报 "A terminal is required to authenticate"。
@@ -61,20 +61,78 @@ info "切换板级配置: $CHIP / $DEFCONFIG_NAME"
 
 [ -f "$DEFCONFIG" ] || die "defconfig 不存在: $DEFCONFIG"
 
-# ---------- 2. Ubuntu 版本 → 22.04 (jammy) ----------
-info "把 rootfs 从 focal(20.04) 切到 jammy(22.04)"
-cp -n "$DEFCONFIG" "${DEFCONFIG}.bak" 2>/dev/null || true
+# ---------- 2. 补齐 ubuntu24.04 目录（SDK 不自带） ----------
+# 上游 SDK 只有 ubuntu20.04 / ubuntu22.04，而 Kconfig 的 noble 分支指向
+# mk-rootfs.sh 里的 `cd ubuntu24.04`。目录不存在时 rootfs 构建会在 cd 那行失败。
+# 这里从 ubuntu22.04 复制骨架（排除产物），并改掉三处版本绑定。
+prepare_ubuntu_dir() {
+  local dst="$SDK_DIR/ubuntu24.04"
+  local src="$SDK_DIR/ubuntu22.04"
 
+  if [ -d "$dst" ]; then
+    info "ubuntu24.04 目录已存在，跳过补齐"
+  else
+    [ -d "$src" ] || die "找不到 $src，SDK 不完整"
+    info "补齐 ubuntu24.04：从 ubuntu22.04 复制骨架（排除产物，约 370MB）"
+
+    # 不用 cp -a：binary/ 里是 root 属主文件，普通用户读不了会刷大量错误，
+    # 且命令以非零状态退出会中断后续步骤。rsync --exclude 从源头就不碰它们。
+    if command -v rsync >/dev/null 2>&1; then
+      rsync -a --exclude 'binary' --exclude '*.tar.gz' --exclude '*.img' \
+        "$src/" "$dst/" || die "rsync 复制失败"
+    else
+      warn "未安装 rsync，退回 cp -a（会刷权限错误，但能复制成功）"
+      cp -a "$src" "$dst" 2>/dev/null || true
+      sudo rm -rf "$dst/binary"
+      find "$dst" -maxdepth 1 \( -name '*.tar.gz' -o -name '*.img' \) -delete
+    fi
+  fi
+
+  # ① sources.list: jammy → noble
+  if grep -q '\bjammy\b' "$dst/sources.list" 2>/dev/null; then
+    sed -i 's/\bjammy\b/noble/g' "$dst/sources.list"
+    info "已改 sources.list: jammy → noble"
+  fi
+
+  # ② mk-base-ubuntu.sh: 基础 rootfs 版本号与下载地址
+  local mkb="$dst/mk-base-ubuntu.sh"
+  if [ -f "$mkb" ] && grep -q 'ubuntu-base-22\.04' "$mkb"; then
+    sed -i 's|ubuntu-base-22\.04\.5-base-|ubuntu-base-24.04.5-base-|g; \
+            s|releases/22\.04/release|releases/24.04/release|g' "$mkb"
+    info "已改 mk-base-ubuntu.sh: ubuntu-base 22.04.5 → 24.04.5"
+  fi
+
+  # ③ readme.md 的版本描述（纯文本）
+  local rd="$dst/readme.md"
+  if [ -f "$rd" ]; then
+    sed -i 's|ubuntu 22\.04 (Jammy-X11)|ubuntu 24.04 (Noble-X11)|; \
+            s|## 构建 Ubuntu22\.04镜像|## 构建 Ubuntu24.04镜像|' "$rd"
+  fi
+
+  # 语法自检：改坏了要在这里发现，而不是等 60 分钟后编译失败
+  local f
+  for f in mk-base-ubuntu.sh mk-image.sh mk-ubuntu-rootfs.sh ch-mount.sh; do
+    [ -f "$dst/$f" ] || continue
+    bash -n "$dst/$f" || die "$f 语法检查失败，请手动检查"
+  done
+  info "ubuntu24.04 目录就绪（已完成版本改造 + 语法自检）"
+}
+
+prepare_ubuntu_dir
+
+# ---------- 3. Ubuntu 版本 → 24.04 (noble) ----------
+info "把 rootfs 从 focal(20.04) 切到 noble(24.04)"
+cp -n "$DEFCONFIG" "${DEFCONFIG}.bak" 2>/dev/null || true
 # Kconfig 的 choice 只允许一个为 y。这里做幂等重建：
 # 丢掉所有旧的 rootfs-choice 行（=y 与 "is not set" 两种形式），统一写在文件头。
 printf '%s\n' '# RK_BUILDROOT is not set' >  "${DEFCONFIG}.tmp"
 printf '%s\n' '# RK_YOCTO is not set'     >> "${DEFCONFIG}.tmp"
-printf '%s\n' 'RK_UBUNTU_JAMMY=y'         >> "${DEFCONFIG}.tmp"
+printf '%s\n' 'RK_UBUNTU_NOBLE=y'         >> "${DEFCONFIG}.tmp"
 grep -vE '^# RK_(BUILDROOT|YOCTO) is not set$|^RK_UBUNTU_(FOCAL|JAMMY|NOBLE)=y$|^# RK_UBUNTU_(FOCAL|JAMMY|NOBLE) is not set$' \
   "$DEFCONFIG" >> "${DEFCONFIG}.tmp"
 mv "${DEFCONFIG}.tmp" "$DEFCONFIG"
 
-# ---------- 3. 内核版本 ----------
+# ---------- 4. 内核版本 ----------
 if grep -q '^RK_KERNEL_PREFERRED=' "$DEFCONFIG"; then
   info "设置内核版本: $KERNEL"
   sed -i -E "s/^RK_KERNEL_PREFERRED=.*/RK_KERNEL_PREFERRED=\"${KERNEL}\"/" "$DEFCONFIG"
@@ -86,11 +144,11 @@ echo "----- $DEFCONFIG -----"
 grep -E 'UBUNTU|KERNEL|ROOTFS_IMAGE|DTS_NAME|PARAMETER' "$DEFCONFIG"
 echo "----------------------"
 
-# ---------- 4. 校验 choice 唯一性 ----------
+# ---------- 5. 校验 choice 唯一性 ----------
 COUNT=$(grep -cE '^RK_UBUNTU_(FOCAL|JAMMY|NOBLE)=y' "$DEFCONFIG" || true)
 [ "$COUNT" -eq 1 ] || die "Ubuntu 版本 choice 非法（=y 的数量为 $COUNT，应为 1）"
 
-# ---------- 5. 清理旧配置并重新生成 ----------
+# ---------- 6. 清理旧配置并重新生成 ----------
 # 只改 defconfig 不会自动刷新 output/.config（时间戳判断不可靠），这里强制重生成
 rm -f output/.config output/.config.old
 info "重新生成 output/.config"
@@ -100,18 +158,18 @@ info "重新生成 output/.config"
 ACTUAL_VER=$(grep -E '^RK_UBUNTU_VERSION=' output/.config | cut -d'"' -f2)
 ACTUAL_NUM=$(grep -E '^RK_UBUNTU_NUMBER='  output/.config | cut -d'"' -f2)
 info "output/.config: RK_UBUNTU_VERSION=$ACTUAL_VER ($ACTUAL_NUM)"
-[ "$ACTUAL_VER" = "jammy" ] || die "rootfs 未切换为 jammy（当前: $ACTUAL_VER），检查 defconfig 与 Kconfig choice"
+[ "$ACTUAL_VER" = "noble" ] || die "rootfs 未切换为 noble（当前: $ACTUAL_VER），检查 defconfig 与 Kconfig choice"
 
 info "配置完成：chip=$CHIP defconfig=$DEFCONFIG_NAME rootfs=$ACTUAL_NUM kernel=$KERNEL"
 
 [ "$DO_BUILD" = 1 ] || { info "仅配置模式（DO_BUILD=0），退出"; exit 0; }
 
-# ---------- 5.5 清理残留挂载（rootfs 失败的根因） ----------
+# ---------- 6.5 清理残留挂载（rootfs 失败的根因） ----------
 # mk-base-ubuntu.sh 是先 `rm -rf binary` 再 `ch-mount.sh -m binary`，
 # 而 umount 只挂在 trap ERR 上。一旦中途失败/被 Ctrl-C，proc/sys/dev 会残留，
 # 下次 rm -rf 就报大量 "Operation not permitted" 并直接失败。
 cleanup_stale_mounts() {
-  local dir="$SDK_DIR/ubuntu22.04/binary"
+  local dir="$SDK_DIR/ubuntu24.04/binary"
   [ -d "$dir" ] || return 0
 
   local found=0
@@ -149,7 +207,7 @@ ensure_sudo() {
   info "sudo 凭证有效"
 }
 
-# ---------- 6. 编译 ----------
+# ---------- 7. 编译 ----------
 # 分步编译：哪一步失败只看那一步，rootfs 的 60~90 分钟不会白跑
 run_step() {
   local name="$1"; shift
@@ -162,11 +220,12 @@ run_step() {
   fi
 }
 
-# 关键：宿主机 e2fsprogs >= 1.47 的 mkfs.ext4 会默认开启 orphan_file 特性，
-# 而 Ubuntu 22.04 镜像内的 e2fsck 是 1.46.5，不认识该特性，会导致板子卡在 (initramfs)。
+# 关于 orphan_file：Ubuntu 24.04 自带的 e2fsck 是 1.47.0，已认识 orphan_file（FEATURE_C12），
+# 理论上可以保留默认值。这里仍显式关闭，是为了让同一套脚本在 22.04 / 24.04 上通用，
+# 且关闭只损失一个性能优化项，对功能没有影响（见 README 第九章）。
 # 治本：编译 rootfs 之前先把 mk-image.sh 的 mkfs.ext4 参数固定住（见 README 9.5）。
 patch_mk_image() {
-  local f="$SDK_DIR/ubuntu22.04/mk-image.sh"
+  local f="$SDK_DIR/ubuntu24.04/mk-image.sh"
   [ -f "$f" ] || { warn "未找到 mk-image.sh，跳过"; return 0; }
 
   if grep -q "MKFS_OPTS=" "$f"; then
@@ -187,11 +246,11 @@ patch_mk_image() {
 
 # 兜底：万一 mk-image.sh 没改成（或用了别的打包路径），编译后仍检查一次
 check_orphan_file() {
-  local img="$SDK_DIR/ubuntu22.04/ubuntu-rk356x-${DESKTOP}-rootfs.img"
+  local img="$SDK_DIR/ubuntu24.04/ubuntu-rk356x-${DESKTOP}-rootfs.img"
   [ -f "$img" ] || { warn "未找到 rootfs 镜像，跳过检查: $img"; return 0; }
 
   if dumpe2fs -h "$img" 2>/dev/null | grep -q orphan_file; then
-    warn "检测到 orphan_file 特性（板子上 e2fsck 1.46.5 不支持），正在移除..."
+    warn "检测到 orphan_file 特性，正在移除..."
     sudo tune2fs -O ^orphan_file "$img" || return 1
     dumpe2fs -h "$img" 2>/dev/null | grep "Filesystem features"
     info "orphan_file 已移除，需重新打包固件"
@@ -213,13 +272,13 @@ else
   run_step "kernel (6.1 + dtb + extboot.img)"    ./build.sh kernel
   run_step "sudo 认证" ensure_sudo
   run_step "清理残留挂载" cleanup_stale_mounts
-  run_step "rootfs (Ubuntu 22.04, 需 sudo, 60~90min)" ./build.sh ubuntu
+  run_step "rootfs (Ubuntu 24.04, 需 sudo, 60~90min)" ./build.sh ubuntu
   # 兜底：若上面补丁没生效，这里仍会尝试 tune2fs 修掉
   run_step "ext4 特性检查" check_orphan_file
   run_step "firmware (打包 + update.img)"         ./build.sh firmware
 fi
 
-# ---------- 7. 结果 ----------
+# ---------- 8. 结果 ----------
 FW="$SDK_DIR/output/firmware/update.img"
 if [ -e "$FW" ]; then
   info "编译成功"
@@ -232,7 +291,7 @@ if [ -e "$FW" ]; then
 --- 镜像内容自检 ---
 EOF
   sudo mkdir -p /tmp/lbc-chk 2>/dev/null && \
-  sudo mount -o loop,ro "$SDK_DIR/ubuntu22.04/ubuntu-${CHIP%%_*}-${DESKTOP}-rootfs.img" /tmp/lbc-chk 2>/dev/null && {
+  sudo mount -o loop,ro "$SDK_DIR/ubuntu24.04/ubuntu-${CHIP%%_*}-${DESKTOP}-rootfs.img" /tmp/lbc-chk 2>/dev/null && {
     grep PRETTY_NAME /tmp/lbc-chk/etc/os-release 2>/dev/null
     echo "内核模块: $(ls /tmp/lbc-chk/lib/modules/ 2>/dev/null)"
     sudo umount /tmp/lbc-chk 2>/dev/null

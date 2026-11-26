@@ -1,17 +1,21 @@
-# Ubuntu 26.04 编译鲁班猫2（RK3568）Ubuntu 22.04 镜像完整教程
+# Ubuntu 26.04 编译鲁班猫2（RK3568）Ubuntu 24.04 镜像完整教程
 
 @[toc](目录)
 
 ## 前言
 
-野火（EmbedFire）官方给出的鲁班猫 SDK 编译说明，主要针对 **Ubuntu 20.04 / 22.04** 宿主机。
-而较新的 Ubuntu 24.04、26.04 上，由于包重命名、`qemu-user-static` 被移除、
+野火（EmbedFire）官方给出的鲁班猫 SDK 编译说明，主要针对 **Ubuntu 20.04 / 22.04** 宿主机，
+且 SDK 自带的 rootfs 构建目录只到 `ubuntu22.04`。
+而较新的 Ubuntu 24.04 / 26.04 宿主机上，由于包重命名、`qemu-user-static` 被移除、
 `mkfs.ext4` 默认特性变更等原因，**照着官方文档走会在多个环节卡住**。
 
-本文记录在 **Ubuntu 26.04** 上从零编译 **鲁班猫2（RK3568）Ubuntu 22.04 + 6.1 内核** 镜像，
-并成功烧录上机的完整过程，包含每一个真实报错的原因与修复方法。
+本文记录在 **Ubuntu 26.04** 上从零编译 **鲁班猫2（RK3568）Ubuntu 24.04 + 6.1 内核** 镜像的完整过程，
+包含每一个真实报错的原因与修复方法。
 
-**最终成果**：一个约 4.2 GB 的 `update.img`，烧录后正常进入 XFCE 桌面系统。
+> ⚠️ **重要前提**：官方 SDK 里**没有 `ubuntu24.04/` 目录**（只有 `ubuntu20.04` 和 `ubuntu22.04`）。
+> 直接 `menuconfig` 选 noble 会因目标目录不存在而失败。本文包含**自己补齐该目录**的完整做法，见第七章。
+
+**目标成果**：一个约 4 GB 的 `update.img`，烧录后进入 XFCE 桌面系统。
 
 ### 适用范围
 
@@ -19,14 +23,14 @@
 | --- | --- |
 | 宿主机 | Ubuntu 22.04 / 24.04 / 26.04（本文以 26.04 为例，差异点已标注） |
 | 目标板卡 | 鲁班猫2（LubanCat-2，RK3568）；同族 RK3566 板卡亦可参考 |
-| 目标系统 | Ubuntu 22.04 LTS (jammy) + XFCE 桌面 |
+| 目标系统 | Ubuntu 24.04 LTS (noble) + XFCE 桌面 |
 | 内核 | 6.1.x |
 | SDK | 鲁班猫通用 SDK（`lubancat_linux_generic.xml`） |
 
 ### 阅读建议
 
-- 首次编译请**按顺序**通读，尤其不要跳过第三章的「系统级配置」和第九章的「ext4 特性检查」；
-- 第九章那个坑**只有真正烧到板子上才会暴露**，编译和烧写全程都不会报错；
+- 首次编译请**按顺序**通读，尤其不要跳过第三章的「系统级配置」、第七章的「补齐 ubuntu24.04 目录」；
+- 第七章的目录补齐全流程都是新增工作，也是 24.04 与 22.04 最大的不同；
 - 遇到报错先翻第十二章的踩坑汇总表，绝大多数都能对号入座。
 
 ### 本文目录
@@ -41,16 +45,16 @@
 四、安装 repo 工具
 五、拉取通用 SDK .......... git 身份检查 + manifest 说明 + 网络问题处理
 六、选择板卡配置 .......... 选定 rk3568 defconfig
-七、切换到 Ubuntu 22.04 ... 改 JAMMY + 清 .config 缓存
+七、补齐 ubuntu24.04 目录 ⚠️ 从 22.04 复制改造 + 切 noble + 清缓存
 八、编译 .................. 分步编译与耗时参考
-九、ext4 特性检查 ⚠️ ...... 烧录前必查，否则起不来
+九、ext4 特性说明 ......... 24.04 不再踩坑，但脚本仍显式关闭
 十、打包产物与烧录 ........ 正确工具是 upgrade_tool
 十一、首次登录 ............ 默认账号密码
-十二、踩坑汇总 ............ 10 个坑对照表
+十二、踩坑汇总 ............ 踩坑对照表
 十三、常见问题 FAQ
 十四、参考资料
 十五、配套脚本 ............ scripts/ 三个脚本与本文章节的对应关系
-十六、编译清单 ............ 18 步打勾对照
+十六、编译清单 ............ 打勾对照
 ```
 
 ---
@@ -65,22 +69,22 @@ flowchart TD
     B --> C["3. 系统级配置 ⚠️<br/>qemu-aarch64-static 软链<br/>python/python2 处理"]
     C --> D["4. 安装 repo<br/>repo init + repo sync<br/>约 18GB"]
     D --> E["5. 选板卡<br/>./build.sh chip:rk3566_rk3568:xxx"]
-    E --> F["6. 改 Ubuntu 22.04<br/>FOCAL → JAMMY"]
-    F --> G["7. 清缓存 ⚠️<br/>rm output/.config<br/>否则仍是 20.04"]
-    G --> G2["8. 修 mk-image.sh ⚠️<br/>关掉 orphan_file<br/>只做一次"]
+    E --> F["6. 补齐 ubuntu24.04 ⚠️<br/>从 22.04 复制改造"]
+    F --> G["7. 改 noble + 清缓存<br/>rm output/.config"]
+    G --> G2["8. 修 mk-image.sh<br/>关掉 orphan_file"]
     G2 --> H1["9. ./build.sh loader<br/>十几秒"]
     H1 --> H2["10. ./build.sh kernel<br/>10~20 分钟"]
     H2 --> H3["11. ./build.sh ubuntu<br/>60~90 分钟 ⏳"]
     H3 --> I{"12. 复核镜像<br/>含 orphan_file?"}
-    I -->|有 ⚠️| J["tune2fs -O ^orphan_file<br/>补救"]
+    I -->|有| J["tune2fs -O ^orphan_file<br/>补救"]
     I -->|没有| K
     J --> K["13. ./build.sh firmware<br/>打包 update.img"]
     K --> L["14. upgrade_tool UF<br/>烧写整包"]
     L --> M["15. 上电启动<br/>cat / temppwd"]
     
     style C fill:#ffe6cc,stroke:#d79b00
+    style F fill:#f8cecc,stroke:#b85450
     style G fill:#ffe6cc,stroke:#d79b00
-    style G2 fill:#f8cecc,stroke:#b85450
     style I fill:#fff2cc,stroke:#d6b656
     style J fill:#f8cecc,stroke:#b85450
     style H3 fill:#d5e8d4,stroke:#82b366
@@ -100,11 +104,11 @@ flowchart TD
      ↓
 [5] ./build.sh chip:rk3566_rk3568:LubanCat_rk3568_ubuntu_xfce_defconfig
      ↓
-[6] 改 defconfig：RK_UBUNTU_FOCAL → RK_UBUNTU_JAMMY
+[6] 补齐 ubuntu24.04 目录（rsync 复制 ubuntu22.04，改 sources.list + 版本号）⚠️ SDK 不自带
      ↓
-[7] rm output/.config 强制重新生成                      ⚠️ 不做仍是 20.04
+[7] 改 defconfig：RK_UBUNTU_FOCAL → RK_UBUNTU_NOBLE，并 rm output/.config
      ↓
-[8] 改 ubuntu22.04/mk-image.sh 关掉 orphan_file        ⚠️ 只做一次，不做必卡 initramfs
+[8] 改 ubuntu24.04/mk-image.sh 关掉 orphan_file（通用，建议保留）
      ↓
 [9] ./build.sh loader        （十几秒）
      ↓
@@ -129,8 +133,8 @@ flowchart TD
 | ---------------- | --- | ----------------------------- | ------------------------------------------ |
 | **git 身份未配置**    | 第五章 | `repo init` 直接抛异常退出           | `git config --global user.name/user.email` |
 | **python2 缺失**   | 第三章 | `build.sh loader` 直接退出        | 建个转发到 python3 的 shim（并非真需要 Python 2）       |
-| `.config` **缓存** | 第七章 | rootfs 编出来是 20.04，白等 60~90 分钟 | 删掉 `output/.config` 重新生成                   |
-| `orphan_file`    | 第九章 | 烧写"成功"但板子卡 initramfs          | `tune2fs` 关掉该特性后重打包                        |
+| **SDK 缺 ubuntu24.04 目录** | 第七章 | 选 noble 后 `cd` 目标目录失败          | 从 `ubuntu22.04` 复制改造（本文给全命令）              |
+| `.config` **缓存** | 第七章 | rootfs 编出来仍是旧版本，白等 60~90 分钟 | 删掉 `output/.config` 重新生成                   |
 
 ---
 
@@ -273,8 +277,11 @@ ls -l /usr/bin/qemu-aarch64-static     # 确认软链已建立
 ls /proc/sys/fs/binfmt_misc/ | grep qemu-aarch64
 
 # 2) 解出 ubuntu-base 里的 arm64 程序试跑
+#    注意：先做完第七章，ubuntu24.04/ 目录和 base 包才会存在
 mkdir -p /tmp/qt
-tar -xzf ~/LubanCat_SDK/ubuntu22.04/ubuntu-base-22.04.5-base-arm64.tar.gz -C /tmp/qt 2>/dev/null
+BASE_TGZ=$(ls ~/LubanCat_SDK/ubuntu24.04/ubuntu-base-24.04.5-base-arm64.tar.gz 2>/dev/null \
+        || ls ~/LubanCat_SDK/ubuntu22.04/ubuntu-base-22.04.5-base-arm64.tar.gz 2>/dev/null | head -1)
+tar -xzf "$BASE_TGZ" -C /tmp/qt 2>/dev/null
 QEMU_LD_PREFIX=/tmp/qt /tmp/qt/usr/bin/true && echo "qemu 可执行 arm64 ✓"
 ```
 
@@ -682,7 +689,8 @@ LubanCat_SDK/
 ├── tools/                        # 打包/烧录工具（含 upgrade_tool）
 ├── u-boot/                       # 引导 + TPL/SPL
 ├── ubuntu20.04/                  # focal 根文件系统源码
-└── ubuntu22.04/                  # jammy 根文件系统源码（本教程使用）
+└── ubuntu22.04/                  # jammy 根文件系统源码
+                                  # 注意：SDK 不带 ubuntu24.04/，需自行补齐（见第七章）
 ```
 
 > `tree -L 1` 会输出 `13 directories, 3 files` —— 13 个目录 + 3 个软链（软链算文件），
@@ -839,7 +847,7 @@ device/rockchip/.chips/rk3566_rk3568/LubanCat_rk3568_ubuntu_xfce_defconfig
 其中几项需要了解：
 
 ```
-RK_UBUNTU_JAMMY=y                            # 目标系统版本（关键，见第七章）
+RK_UBUNTU_NOBLE=y                            # 目标系统版本（关键，见第七章）
 RK_ROOTFS_SYSTEM_UBUNTU=y
 RK_ROOTFS_TARGET_XFCE=y                      # 桌面环境
 RK_ROOTFS_IMAGE="ubuntu-rk356x-${RK_ROOTFS_TARGET}-rootfs.img"
@@ -855,59 +863,212 @@ RK_PACKAGE_FILE="package-file-extboot"
 
 ---
 
-## 七、切换到 Ubuntu 22.04（关键步骤）
+## 七、补齐 ubuntu24.04 目录并切换（关键步骤）
 
-### 7.1 为什么默认不是 22.04
+这一步是 22.04 教程里完全没有的，也是 24.04 最大的工作量。
 
-默认 defconfig 里写的是 `RK_UBUNTU_FOCAL=y`，而 `FOCAL` 指的是 **Ubuntu 20.04**。
+### 7.1 先看清 SDK 到底有什么
 
-Kconfig 中的定义逻辑是：
+```bash
+cd ~/LubanCat_SDK
+ls -d ubuntu* debian*
+```
+
+**实际输出只有两个 Ubuntu 目录**：
 
 ```
+ubuntu20.04  ubuntu22.04
+```
+
+**SDK 里没有 `ubuntu24.04`。** 但 Kconfig 里明明写了 noble：
+
+```bash
+grep -A12 'config RK_UBUNTU_VERSION' device/rockchip/common/configs/Config.in.ubuntu
+```
+
+```startLine:23:32:device/rockchip/common/configs/Config.in.ubuntu
 config RK_UBUNTU_VERSION
 	string
-	default "focal" if RK_UBUNTU_FOCAL     # 20.04
-	default "jammy" if RK_UBUNTU_JAMMY     # 22.04
-	default "noble" if RK_UBUNTU_NOBLE     # 24.04
+	default "focal" if RK_UBUNTU_FOCAL
+	default "jammy" if RK_UBUNTU_JAMMY
+	default "noble" if RK_UBUNTU_NOBLE
+
+config RK_UBUNTU_NUMBER
+	string
+	default "ubuntu20.04" if RK_UBUNTU_FOCAL
+	default "ubuntu22.04" if RK_UBUNTU_JAMMY
+	default "ubuntu24.04" if RK_UBUNTU_NOBLE
 ```
 
+而 `mk-rootfs.sh` 是这么进入构建目录的：
+
+```startLine:241:241:device/rockchip/common/scripts/mk-rootfs.sh
+	cd "$RK_UBUNTU_NUMBER"
+```
+
+**结论**：选了 noble 之后，脚本会 `cd ubuntu24.04`，但该目录不存在，
+`cd` 失败 → 整个 rootfs 构建在这一行断掉。
+
+> 这是「Kconfig 有选项但上游没提供实现」的典型情况。官方 defconfig 默认停在 focal，
+> 也许正是因为 noble 这条路径从未被真正验证过。
+
+### 7.2 补齐目录：从 ubuntu22.04 复制
+
+`ubuntu22.04/` 里真正参与构建的只有脚本和几个素材目录，产物（`binary/`、`.tar.gz`、`.img`）
+占了大头，**必须先排除再复制**，否则会白拷 8 GB。
+
+```bash
+cd ~/LubanCat_SDK
+
+# 先看子项大小，确认哪些是大件
+du -sh ubuntu22.04/* | sort -h | tail -6
+```
+
+典型输出：
+
+```
+976K   ubuntu22.04/overlay
+27M    ubuntu22.04/ubuntu-base-22.04.5-base-arm64.tar.gz
+87M    ubuntu22.04/overlay-firmware
+264M   ubuntu22.04/packages
+963M   ubuntu22.04/ubuntu-base-xfce-arm64-20261125.tar.gz
+3.4G   ubuntu22.04/binary
+3.5G   ubuntu24.04/ubuntu-rk356x-xfce-rootfs.img
+```
+
+复制时把后三项排掉：
+
+```bash
+cd ~/LubanCat_SDK
+rsync -a \
+  --exclude 'binary' \
+  --exclude '*.tar.gz' \
+  --exclude '*.img' \
+  ubuntu22.04/ ubuntu24.04/
+
+du -sh ubuntu24.04        # 期望约 370 MB
+```
+
+> **为什么不用 `cp -a`**：`binary/` 里全是 root 属主的文件（`/etc/shadow`、`/root`、
+> `/etc/ssl/private` 等），普通用户 `cp` 会刷出几十行 `权限不够`，
+> 命令以非零状态退出，后续清理被跳过。`rsync --exclude` 从源头上就不碰它们。
+
+复制完的目录结构：
+
+```
+ubuntu24.04/
+├── Docker/
+├── add-build-info.sh
+├── ch-mount.sh
+├── mk-base-ubuntu.sh          ← 需要改版本号
+├── mk-image.sh                ← 需要改 orphan_file 注释
+├── mk-ubuntu-rootfs.sh
+├── overlay/                   ← 桌面定制、开机脚本等
+├── overlay-debug/
+├── overlay-firmware/
+├── packages/                  ← 预置 deb（mali、camera 等），与版本无关，直接复用
+├── post-build.sh
+├── readme.md
+├── sources.list               ← 必须改 jammy → noble
+└── ubuntu-build-service/
+```
+
+### 7.3 改造三处
+
+**① `sources.list` 全部换 noble**
+
+```bash
+cd ~/LubanCat_SDK/ubuntu24.04
+sed -i 's/\bjammy\b/noble/g' sources.list
+cat sources.list
+```
+
+期望：
+
+```
+deb http://mirrors.aliyun.com/ubuntu-ports/ noble main multiverse restricted universe
+deb http://mirrors.aliyun.com/ubuntu-ports/ noble-backports main multiverse restricted universe
+deb http://mirrors.aliyun.com/ubuntu-ports/ noble-security main multiverse restricted universe
+deb http://mirrors.aliyun.com/ubuntu-ports/ noble-updates main multiverse restricted universe
+```
+
+**② `mk-base-ubuntu.sh` 改基础 rootfs 的版本号与下载地址**
+
+```bash
+cd ~/LubanCat_SDK/ubuntu24.04
+sed -i 's|ubuntu-base-22\.04\.5-base-|ubuntu-base-24.04.5-base-|g; \
+        s|releases/22\.04/release|releases/24.04/release|g' mk-base-ubuntu.sh
+grep -n 'ubuntu-base-24' mk-base-ubuntu.sh
+```
+
+期望四行全部指向 24.04：
+
+```startLine:45:49:LubanCat_SDK/ubuntu24.04/mk-base-ubuntu.sh
+    if [ ! -e ubuntu-base-24.04.5-base-$ARCH.tar.gz ]; then
+        echo "\033[36m wget ubuntu-base-24.04.5-base-"$ARCH".tar.gz \033[0m"
+        wget -c http://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.5-base-$ARCH.tar.gz
+    fi
+    sudo tar -xzf ubuntu-base-24.04.5-base-$ARCH.tar.gz -C $TARGET_ROOTFS_DIR/
+```
+
+**先验证这个文件名真实存在**（避免脚本跑到下载那一步才发现 404）：
+
+```bash
+curl -sI http://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.5-base-arm64.tar.gz \
+  | head -1
+# 期望：HTTP/1.1 200 OK
+```
+
+**③ `readme.md` 里的版本描述**（纯文本，不影响编译，改了更清楚）
+
+```bash
+sed -i 's|ubuntu 22\.04 (Jammy-X11)|ubuntu 24.04 (Noble-X11)|; \
+        s|## 构建 Ubuntu22\.04镜像|## 构建 Ubuntu24.04镜像|' readme.md
+```
+
+改完检查语法，确保没把脚本改坏：
+
+```bash
+for f in mk-base-ubuntu.sh mk-image.sh mk-ubuntu-rootfs.sh; do bash -n $f && echo "$f OK"; done
+```
+
+### 7.4 再切 defconfig 到 noble
+
 `FOCAL / JAMMY / NOBLE` 是 **choice** 类型，**同一时间只能有一个为** `y`。
-所以不能只是加一行 `RK_UBUNTU_JAMMY=y`，必须先把 `FOCAL` 关掉。
+所以不能只加 `RK_UBUNTU_NOBLE=y`，必须先把其他两个关掉。
 
-### 7.2 修改方式
-
-**方式一：交互菜单（最稳妥）**
+**方式一：交互菜单**
 
 ```bash
 cd ~/LubanCat_SDK
 HOST_EXTRACFLAGS="-Wno-implicit-int" ./build.sh menuconfig
-# 进入 System configuration -> Rootfs -> Ubuntu -> distro，选 jammy
+# 进入 System configuration -> Rootfs -> Ubuntu -> distro，选 noble
 ```
 
 > `HOST_EXTRACFLAGS` 是避开 GCC 15 的 ncurses 误报，原因见 **3.3**。
 > 如果你的 GCC 是 14 及以前，可以去掉这个前缀直接跑。
 
-**方式二：直接改文件**
+**方式二：直接改文件（推荐，可脚本化）**
 
 ```bash
 cd ~/LubanCat_SDK
 CFG=device/rockchip/.chips/rk3566_rk3568/LubanCat_rk3568_ubuntu_xfce_defconfig
 cp -n $CFG ${CFG}.bak
 
-# 先把三个选项全部关掉，再单独打开 jammy
+# 先把三个选项全部关掉，再单独打开 noble
 sed -i -E 's/^RK_UBUNTU_(FOCAL|JAMMY|NOBLE)=y/# RK_UBUNTU_\1 is not set/' $CFG
-sed -i '1i RK_UBUNTU_JAMMY=y' $CFG
+sed -i '1i RK_UBUNTU_NOBLE=y' $CFG
 
 # 必须只有一行 =y
 grep -cE '^RK_UBUNTU_(FOCAL|JAMMY|NOBLE)=y' $CFG     # 期望输出 1
 ```
 
-### 7.3 最容易踩的坑：`output/.config` 不会自动刷新
+### 7.5 最容易踩的坑：`output/.config` 不会自动刷新
 
-**这是本教程第一个必须注意的坑，非常隐蔽。**
+**这个坑在 24.04 上同样存在，而且更致命**——因为如果 `.config` 没刷新成 noble，
+你辛苦补的 `ubuntu24.04/` 目录根本不会被用到，编出来的还是 `ubuntu22.04` 的内容。
 
-改完 defconfig 后直接编译，会发现生成的仍然是 20.04。原因是
-`mk-config.sh` 里的 `prepare_config()` 靠**文件时间戳**判断是否需要重新生成配置，
+原因是 `mk-config.sh` 里的 `prepare_config()` 靠**文件时间戳**判断是否需要重新生成配置，
 用 `sed` 改文件后时间戳判断不可靠，编译时用的还是旧配置。
 
 **所以必须手动清掉缓存再重新生成：**
@@ -918,20 +1079,24 @@ rm -f output/.config output/.config.old
 ./build.sh defconfig:LubanCat_rk3568_ubuntu_xfce_defconfig
 
 # 复核，这一步不能省
-grep -E 'RK_UBUNTU_(VERSION|NUMBER|FOCAL|JAMMY)' output/.config
+grep -E 'RK_UBUNTU_(VERSION|NUMBER|FOCAL|JAMMY|NOBLE)' output/.config
 ```
 
 期望输出：
 
 ```
-RK_UBUNTU_VERSION="jammy"
-RK_UBUNTU_NUMBER="ubuntu22.04"
+RK_UBUNTU_VERSION="noble"
+RK_UBUNTU_NUMBER="ubuntu24.04"
 # RK_UBUNTU_FOCAL is not set
-RK_UBUNTU_JAMMY=y
+# RK_UBUNTU_JAMMY is not set
+RK_UBUNTU_NOBLE=y
 ```
 
-> 如果这里显示的不是 `jammy`，后面 rootfs 编译出来就是 20.04，
-> 而 rootfs 是耗时最长的一步，等于白等一个多小时。
+> 最后再确认一遍目标目录存在，这是本方案和 22.04 教程唯一的结构性差别：
+>
+> ```bash
+> ls -d ~/LubanCat_SDK/$(grep -oP '(?<=RK_UBUNTU_NUMBER=")[^"]+' output/.config)
+> ```
 
 ---
 
@@ -946,11 +1111,11 @@ RK_UBUNTU_JAMMY=y
 cd ~/LubanCat_SDK
 export PATH=$HOME/bin:$PATH      # 让 python2 shim 生效
 
-# ── 编译前：修掉 orphan_file 隐患（见 9.5，只做一次）──────────
-# 不做这一步，编出来的镜像烧进去一定卡在 (initramfs)
-sed -i 's|^sudo mkfs\.ext4 -d ${TARGET_ROOTFS_DIR}|MKFS_OPTS="-O ^orphan_file"\n\nsudo mkfs.ext4 ${MKFS_OPTS} -d ${TARGET_ROOTFS_DIR}|' ubuntu22.04/mk-image.sh
-grep -A1 "MKFS_OPTS" ubuntu22.04/mk-image.sh    # 确认已改
-bash -n ubuntu22.04/mk-image.sh                 # 确认语法没问题
+# ── 编译前：确认 mk-image.sh 的 mkfs 参数（见 9.5）──────────
+# 24.04 目标系统自带 e2fsck 1.47，理论上不需要这一步，
+# 但保留后同一套脚本可兼容 22.04，且对 24.04 无副作用。
+grep -A1 "MKFS_OPTS" ubuntu24.04/mk-image.sh    # 确认已改
+bash -n ubuntu24.04/mk-image.sh                 # 确认语法没问题
 
 # u-boot + trust + MiniLoaderAll.bin
 ./build.sh loader
@@ -962,7 +1127,7 @@ sudo -v
 ./build.sh ubuntu
 
 # ── rootfs 出来后立刻验证 ext4 特性 ───────────────────────
-IMG=ubuntu22.04/ubuntu-rk356x-xfce-rootfs.img
+IMG=ubuntu24.04/ubuntu-rk356x-xfce-rootfs.img
 dumpe2fs -h $IMG 2>/dev/null | grep -q orphan_file \
   && echo "❌ 仍有 orphan_file，执行该命令修复: sudo tune2fs -O ^orphan_file $IMG" \
   || echo "✅ ext4 特性 OK"
@@ -973,12 +1138,12 @@ dumpe2fs -h $IMG 2>/dev/null | grep -q orphan_file \
 
 > **两个别省的地方：**
 >
-> 1. 开头那段 `sed`（修 `mk-image.sh`）。少了它，镜像一定带 `orphan_file`，
->
->    板子必定卡在 `(initramfs)`。原因见第九章。
-> 2. `sudo -v`。少了它，rootfs 结尾打包时 `sudo umount` 可能因密码超时失败，
+> 1. `sudo -v`。少了它，rootfs 结尾打包时 `sudo umount` 可能因密码超时失败，
 >
 >    导致 `tar` 把宿主机的 `/proc` 打进包里，生成一个**看起来成功但完全不能用**的废包。
+> 2. 编译前 `ls -d ubuntu24.04` 确认目录在。第七章没做的话，`./build.sh ubuntu`
+>
+>    会在 `cd ubuntu24.04` 那行直接失败。
 
 **参考耗时**（8 核以上 x86_64 + SSD）：
 
@@ -987,7 +1152,7 @@ dumpe2fs -h $IMG 2>/dev/null | grep -q orphan_file \
 | `./build.sh loader` | `rk356x_spl_loader_*.bin`、`uboot.img` | 十几秒 |
 | `./build.sh kernel` | `Image`、`rk356x-lubancat-generic.dtb`、`extboot.img` | 10~20 分钟 |
 | `./build.sh ubuntu` | `ubuntu-rk356x-xfce-rootfs.img` | **60~90 分钟** |
-| `./build.sh firmware` | `update.img`（约 4.2 GB） | 半分钟左右 |
+| `./build.sh firmware` | `update.img`（约 4 GB） | 半分钟左右 |
 
 rootfs 为什么这么慢：需要在 chroot 里通过 apt 安装 XFCE 桌面所需的
 **上千个 deb 包**，而且全程用 qemu 模拟 arm64 执行，CPU 开销极大。
@@ -1044,20 +1209,20 @@ sudo rm -f /etc/sudoers.d/99-build
 
 ### 8.4 rootfs 阶段下载慢怎么办
 
-`ubuntu22.04/sources.list` 默认使用阿里云的 `ubuntu-ports` 源。如果下载慢，
+`ubuntu24.04/sources.list` 默认使用阿里云的 `ubuntu-ports` 源。如果下载慢，
 可以换成清华源：
 
 ```bash
 cd ~/LubanCat_SDK
-sed -i 's#mirrors.aliyun.com#mirrors.tuna.tsinghua.edu.cn#g' ubuntu22.04/sources.list
+sed -i 's#mirrors.aliyun.com#mirrors.tuna.tsinghua.edu.cn#g' ubuntu24.04/sources.list
 ```
 
-如果 `ubuntu-base-22.04.5-base-arm64.tar.gz` 这个基础包下载特别慢，
+如果 `ubuntu-base-24.04.5-base-arm64.tar.gz` 这个基础包下载特别慢，
 可以手动下载后放进目录（脚本会复用已存在的文件）：
 
 ```bash
-cd ~/LubanCat_SDK/ubuntu22.04
-wget -c https://mirrors.tuna.tsinghua.edu.cn/ubuntu-cdimage/ubuntu-base/releases/22.04/release/ubuntu-base-22.04.5-base-arm64.tar.gz
+cd ~/LubanCat_SDK/ubuntu24.04
+wget -c https://mirrors.tuna.tsinghua.edu.cn/ubuntu-cdimage/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.5-base-arm64.tar.gz
 ```
 
 ### 8.5 rootfs 报 `Operation not permitted`（最常见的失败）
@@ -1077,7 +1242,7 @@ ERROR: exit code 1 from line 259:
 
 #### 为什么会产生残留
 
-`ubuntu22.04/mk-base-ubuntu.sh` 的执行顺序有个缺陷：
+`ubuntu24.04/mk-base-ubuntu.sh` 的执行顺序有个缺陷：
 
 ```bash
 TARGET_ROOTFS_DIR="binary"
@@ -1110,9 +1275,9 @@ grep LubanCat_SDK /proc/mounts
 有残留时会看到类似三行：
 
 ```
-/proc /home/qzy/LubanCat_SDK/ubuntu22.04/binary/proc proc rw,relatime 0 0
-/sys  /home/qzy/LubanCat_SDK/ubuntu22.04/binary/sys  sysfs rw,relatime 0 0
-udev  /home/qzy/LubanCat_SDK/ubuntu22.04/binary/dev  devtmpfs rw,... 0 0
+/proc /home/qzy/LubanCat_SDK/ubuntu24.04/binary/proc proc rw,relatime 0 0
+/sys  /home/qzy/LubanCat_SDK/ubuntu24.04/binary/sys  sysfs rw,relatime 0 0
+udev  /home/qzy/LubanCat_SDK/ubuntu24.04/binary/dev  devtmpfs rw,... 0 0
 ```
 
 输出为空说明没有残留，那就要查别的原因（磁盘满、rootfs 分区超限等）。
@@ -1122,7 +1287,7 @@ udev  /home/qzy/LubanCat_SDK/ubuntu22.04/binary/dev  devtmpfs rw,... 0 0
 按**由浅到深**的顺序卸载（`-l` 为懒卸载，挂载忙时用 `-f` 强制）：
 
 ```bash
-cd ~/LubanCat_SDK/ubuntu22.04
+cd ~/LubanCat_SDK/ubuntu24.04
 
 sudo umount -l binary/proc
 sudo umount -l binary/sys
@@ -1147,7 +1312,7 @@ sudo ./build.sh ubuntu
 ```
 
 > 如果误删了 `binary/` 也不要紧，脚本发现目录不存在时会重新解压
-> `ubuntu-base-22.04.5-base-arm64.tar.gz` 重建，只是要多花几分钟。
+> `ubuntu-base-24.04.5-base-arm64.tar.gz` 重建，只是要多花几分钟。
 
 #### 怎么避免再次发生
 
@@ -1155,7 +1320,7 @@ sudo ./build.sh ubuntu
 - 终端不要中途关闭 / SSH 不要断线（建议 `tmux` 或 `nohup`）
 - 跑之前先自查一遍：`grep LubanCat_SDK /proc/mounts` 应为空
 
-`scripts/03-build-ubuntu22.sh` 已经内置了自动清理（`cleanup_stale_mounts`），
+`scripts/03-build-ubuntu24.sh` 已经内置了自动清理（`cleanup_stale_mounts`），
 在每轮 rootfs 编译前会先卸载残留挂载并校验，可以直接用它规避这个问题。
 
 ### 8.6 rootfs 打包时 `tar: Cannot open: Permission denied`（比 8.5 更隐蔽）
@@ -1220,9 +1385,9 @@ grep -E "sudo: timed out|Run tar pack" ~/LubanCat_SDK/output/log/latest/30-rootf
 pgrep -af "tar zcf ubuntu-base"
 # 有输出 = 还在打包（正常打包 1~2 分钟就结束，跑十几分钟必异常）
 
-ls -l --time-style=+%H:%M:%S ~/LubanCat_SDK/ubuntu22.04/ubuntu-base-*.tar.gz
+ls -l --time-style=+%H:%M:%S ~/LubanCat_SDK/ubuntu24.04/ubuntu-base-*.tar.gz
 sleep 5
-ls -l --time-style=+%H:%M:%S ~/LubanCat_SDK/ubuntu22.04/ubuntu-base-*.tar.gz
+ls -l --time-style=+%H:%M:%S ~/LubanCat_SDK/ubuntu24.04/ubuntu-base-*.tar.gz
 # 大小还在涨 = 正在吞宿主机的 /proc
 ```
 
@@ -1231,7 +1396,7 @@ ls -l --time-style=+%H:%M:%S ~/LubanCat_SDK/ubuntu22.04/ubuntu-base-*.tar.gz
 **方法三：直接查包里有没有 `proc/` 目录**
 
 ```bash
-cd ~/LubanCat_SDK/ubuntu22.04
+cd ~/LubanCat_SDK/ubuntu24.04
 tar -tzf ubuntu-base-*-*.tar.gz | grep -c "^binary/proc/"
 ```
 
@@ -1261,14 +1426,16 @@ binary/proc/fs/jbd2/
 # 1. 杀掉 tar（root 进程，需要 sudo）
 sudo pkill -9 -f "tar zcf ubuntu-base-xfce"
 
-# 2. 卸载残留挂载
-sudo umount -l ~/LubanCat_SDK/ubuntu22.04/binary/proc
+# 2. 卸载残留挂载（三个都要卸，只卸 proc 不够）
+sudo umount -l ~/LubanCat_SDK/ubuntu24.04/binary/proc
+sudo umount -l ~/LubanCat_SDK/ubuntu24.04/binary/sys
+sudo umount -l ~/LubanCat_SDK/ubuntu24.04/binary/dev
 
 # 3. 确认干净（应无输出）
-grep ubuntu22.04/binary /proc/mounts
+grep ubuntu24.04/binary /proc/mounts
 
 # 4. 删掉废包
-rm -f ~/LubanCat_SDK/ubuntu22.04/ubuntu-base-xfce-arm64-*.tar.gz
+rm -f ~/LubanCat_SDK/ubuntu24.04/ubuntu-base-xfce-arm64-*.tar.gz
 ```
 
 > 第 1 步必须用 `sudo`：`tar` 是以 root 身份跑的，普通用户 `kill` 不掉。
@@ -1304,37 +1471,36 @@ sudo ./build.sh ubuntu
 
 ---
 
-## 九、ext4 特性兼容性（编译前必须处理，否则镜像一定起不来）
+## 九、ext4 特性说明（24.04 不再踩坑，但脚本仍显式关闭）
 
-> **这一章是本教程最关键的坑，而且是最容易漏的。**
-> 它不报错、不警告，编译和烧写全程都显示成功，只有板子真正启动时才暴露。
->
-> **它必须在编译前处理，或者编译后、烧录前用一条命令补掉。**
-> 两者选一，但只要漏了，前面 90 分钟的 rootfs 就白编。
+> **这一章讲的是 22.04 教程里最致命的坑。在 24.04 上它基本消失了，
+> 但你需要知道为什么，以及为什么脚本里那段 `-O ^orphan_file` 还是保留着。**
 
 ### 9.0 先看结论（懒人版）
 
-不管你在哪一步，烧录前执行这一条即可：
+烧录前跑一条命令确认即可：
 
 ```bash
 cd ~/LubanCat_SDK
-IMG=ubuntu22.04/ubuntu-rk356x-xfce-rootfs.img
+IMG=ubuntu24.04/ubuntu-rk356x-xfce-rootfs.img
 
 # 有 orphan_file 就移除，并重新打包固件
 if dumpe2fs -h $IMG 2>/dev/null | grep -q orphan_file; then
+  echo "检测到 orphan_file（罕见，说明 mk-image.sh 补丁没生效）"
   sudo tune2fs -O ^orphan_file $IMG
   ./build.sh firmware
   echo "已修复并重新打包"
 else
-  echo "OK，无需处理"
+  echo "OK，无 orphan_file"
 fi
 ```
 
-想彻底避免（推荐，一次配好永不再犯），见 **9.5**。
+**在 24.04 上这条命令通常直接输出 `OK`**，因为目标系统的 `e2fsck` 已经认识这个特性。
 
-### 9.1 现象
+### 9.1 现象（仅 22.04 目标会遇到）
 
-烧写过程完全正常，但板子上电后卡在启动阶段，串口输出最后停在：
+如果目标系统是 Ubuntu 22.04，烧写过程完全正常，但板子上电后卡在启动阶段，
+串口输出最后停在：
 
 ```
 /dev/mmcblk0p3 has unsupported feature(s): FEATURE_C12
@@ -1359,56 +1525,42 @@ BusyBox v1.36.1 (Ubuntu 1:1.30.1-7ubuntu3.1) built-in shell (ash)
 | 环节 | 版本 | 是否支持 `orphan_file` |
 | --- | --- | --- |
 | 宿主机 `mkfs.ext4` | e2fsprogs **≥ 1.47.0** | 支持，且**默认开启** ← 问题来源 |
-| 镜像内 `e2fsck`（22.04） | e2fsprogs **1.46.5** | 不支持 ← 报错方 |
+| 镜像内 `e2fsck`（22.04） | e2fsprogs **1.46.5** | ❌ 不支持 ← 报错方 |
+| 镜像内 `e2fsck`（24.04） | e2fsprogs **1.47.0** | ✅ 支持 ← 所以 24.04 没事 |
 | 板子内核 6.1 | 内核 ≥ 5.15 | 支持（所以内核本身能挂载 ext4） |
 
-`orphan_file` 特性由 **e2fsprogs 1.47.0**（2023 年初）引入，而 Ubuntu 22.04
-自带的是 1.46.5，完全不认识这个特性位，`e2fsck` 检查时直接放弃。
+`orphan_file` 特性由 **e2fsprogs 1.47.0**（2023 年初）引入。
+Ubuntu 22.04 自带 1.46.5，完全不认识这个特性位，`e2fsck` 检查时直接放弃；
+**Ubuntu 24.04 自带 1.47.0，正好跨过这条线**，所以本文的 24.04 方案不受影响。
 
-`ubuntu22.04/mk-image.sh` 调用 mkfs 的那一行没有指定 `-O`：
+`ubuntu24.04/mk-image.sh` 调用 mkfs 时没指定 `-O` 的话，会把**宿主机 mkfs 的新默认特性**
+全部带进镜像。本质上这是「宿主机比目标系统新」导致的版本漂移问题。
 
-```bash
-sudo mkfs.ext4 -d ${TARGET_ROOTFS_DIR} ${ROOTFSIMAGE} ${IMAGE_SIZE_MB}M
-```
-
-于是把**宿主机 mkfs 的新默认特性**全部带进了镜像。
-本质上这是「宿主机比目标系统新」导致的版本漂移问题。
-
-### 9.3 烧录前自查（强烈建议每次编完都跑）
+### 9.3 烧录前自查（建议每次编完都跑）
 
 ```bash
 cd ~/LubanCat_SDK
 
 # 查看镜像带了哪些 ext4 特性
-dumpe2fs -h ubuntu22.04/ubuntu-rk356x-xfce-rootfs.img 2>/dev/null | grep "Filesystem features"
+dumpe2fs -h ubuntu24.04/ubuntu-rk356x-xfce-rootfs.img 2>/dev/null | grep "Filesystem features"
 ```
 
-**只要输出里出现** `orphan_file`**，就一定会起不来。** 有问题的输出长这样：
+24.04 镜像输出的正常样子：
 
 ```
 has_journal ext_attr resize_inode dir_index orphan_file filetype extent
 64bit flex_bg metadata_csum_seed sparse_super large_file huge_file
 dir_nlink extra_isize metadata_csum
-                              ^^^^^^^^^^^ 就是它
+                              ^^^^^^^^^^^ 有它也行，24.04 认识
 ```
 
-也可以直接用一段脚本判断并修复：
-
-```bash
-IMG=~/LubanCat_SDK/ubuntu22.04/ubuntu-rk356x-xfce-rootfs.img
-
-if dumpe2fs -h "$IMG" 2>/dev/null | grep -q orphan_file; then
-  echo "发现 orphan_file，正在移除..."
-  sudo tune2fs -O ^orphan_file "$IMG"
-fi
-
-dumpe2fs -h "$IMG" 2>/dev/null | grep "Filesystem features"
-```
+> 如果同一条命令换成 22.04 的镜像，出现 `orphan_file` 就一定会起不来。
+> 这就是两个版本唯一的本质差别。
 
 ### 9.4 修法一：改已生成的镜像（最快，不用重编）
 
 ```bash
-cd ~/LubanCat_SDK/ubuntu22.04
+cd ~/LubanCat_SDK/ubuntu24.04
 
 # 先备份（reflink 方式，几乎不占额外空间）
 cp --reflink=auto ubuntu-rk356x-xfce-rootfs.img /tmp/rootfs-backup.img
@@ -1425,19 +1577,9 @@ cd ~/LubanCat_SDK && ./build.sh firmware
 
 整个修复过程大约一两分钟，比重新编译 rootfs（一个多小时）划算得多。
 
-### 9.5 修法二：改 `mk-image.sh`，从源头解决（**编译前必须做**）
+### 9.5 修法二：改 `mk-image.sh`（本仓库采用，保留而非必需）
 
-这是**唯一能一劳永逸**的办法：在 `mkfs.ext4` 阶段就不生成 `orphan_file`，
-之后无论编多少次、重新打包多少次都不会再有这个问题。
-
-编辑 `ubuntu22.04/mk-image.sh`，第 31 行原本是：
-
-```bash
-# 原始（宿主机 e2fsprogs ≥ 1.47 会自动带上 orphan_file）
-sudo mkfs.ext4 -d ${TARGET_ROOTFS_DIR} ${ROOTFSIMAGE} ${IMAGE_SIZE_MB}M
-```
-
-改成：
+本仓库的 `ubuntu24.04/mk-image.sh` **已经改好了**，那段是：
 
 ```bash
 MKFS_OPTS="-O ^orphan_file"
@@ -1445,24 +1587,19 @@ MKFS_OPTS="-O ^orphan_file"
 sudo mkfs.ext4 ${MKFS_OPTS} -d ${TARGET_ROOTFS_DIR} ${ROOTFSIMAGE} ${IMAGE_SIZE_MB}M
 ```
 
-一条命令直接改：
+**24.04 其实不需要这一步**，保留有两个理由：
 
-```bash
-cd ~/LubanCat_SDK/ubuntu22.04
+1. 同一套脚本在 22.04 / 24.04 上都能直接用，不用按目标版本分支处理；
+2. 关闭它只损失一个性能优化项，对功能零影响。
 
-sed -i 's|^sudo mkfs\.ext4 -d ${TARGET_ROOTFS_DIR}|MKFS_OPTS="-O ^orphan_file"\n\nsudo mkfs.ext4 ${MKFS_OPTS} -d ${TARGET_ROOTFS_DIR}|' mk-image.sh
-
-# 确认改对了 + 语法没问题
-grep -A2 "MKFS_OPTS" mk-image.sh
-bash -n mk-image.sh
-```
+如果你确认只在 24.04 上用，想恢复默认行为，把 `MKFS_OPTS` 删掉即可。
 
 #### ⚠️ 这里有个反直觉的点（实测踩过）
 
 **不能**写成 `-O has_journal,ext_attr,...` 这样的特性列表。原因：
 
 `mkfs.ext4 -O` 后跟的特性是**追加**到默认集合上，**不是替换**。
-所以即使你列出了 15 个「22.04 兼容」的特性，默认的 `orphan_file` 仍然会被加进去。
+所以即使你列出了 15 个「兼容」的特性，默认的 `orphan_file` 仍然会被加进去。
 
 实测对比（同一条命令，只差写法）：
 
@@ -1481,20 +1618,16 @@ dumpe2fs -h /tmp/t.img | grep "Filesystem features"
 #                                        ↑ 没有 orphan_file
 ```
 
-> 该镜像共 16 个特性，只有 `orphan_file` 一个不被 22.04 的 e2fsck 1.46.5 支持，
-> 其余全部兼容。所以只关这一个就够，不必动其他特性。
-
 #### 改完怎么验证
 
 下次 `./build.sh ubuntu` 跑完后，立刻查：
 
 ```bash
 cd ~/LubanCat_SDK
-dumpe2fs -h ubuntu22.04/ubuntu-rk356x-xfce-rootfs.img 2>/dev/null | grep "Filesystem features"
+dumpe2fs -h ubuntu24.04/ubuntu-rk356x-xfce-rootfs.img 2>/dev/null | grep "Filesystem features"
 ```
 
-`Filesystem features` 那一行里**不应该出现** `orphan_file`。
-如果不放心，直接跑 `9.3` 的自查命令，它会给明确结论。
+如果打过补丁，`Filesystem features` 那一行里**不应该出现** `orphan_file`。
 
 ### 9.6 已经掉进 initramfs 了怎么办
 
@@ -1512,11 +1645,11 @@ dumpe2fs -h ubuntu22.04/ubuntu-rk356x-xfce-rootfs.img 2>/dev/null | grep "Filesy
 `output/firmware/` 目录下的文件**全部是软链**，真实文件在各自的仓库目录里：
 
 ```
-output/firmware/update.img        -> output/update/Image/update.img        (约 4.2 G)
+output/firmware/update.img        -> output/update/Image/update.img        (约 4 G)
 output/firmware/MiniLoaderAll.bin -> u-boot/rk356x_spl_loader_v*.bin
 output/firmware/uboot.img         -> u-boot/uboot.img
 output/firmware/boot.img          -> kernel-6.1/extboot.img
-output/firmware/rootfs.img        -> ubuntu22.04/ubuntu-rk356x-xfce-rootfs.img
+output/firmware/rootfs.img        -> ubuntu24.04/ubuntu-rk356x-xfce-rootfs.img
 output/firmware/parameter.txt     -> device/rockchip/.chips/rk3566_rk3568/parameter-extboot.txt
 
 output/update/Image/update.img    <-- 真实文件在这里
@@ -1542,9 +1675,9 @@ du -shL output/firmware/*              # 显示真实占用
 ```bash
 cd ~/LubanCat_SDK
 mkdir -p /tmp/chk
-sudo mount -o loop,ro ubuntu22.04/ubuntu-rk356x-xfce-rootfs.img /tmp/chk
+sudo mount -o loop,ro ubuntu24.04/ubuntu-rk356x-xfce-rootfs.img /tmp/chk
 
-cat /tmp/chk/etc/os-release                 # 应为 Ubuntu 22.04.x LTS
+cat /tmp/chk/etc/os-release                 # 应为 Ubuntu 24.04.x LTS
 grep -E "^(cat|root):" /tmp/chk/etc/passwd  # 确认用户存在
 ls /tmp/chk/lib/modules/                    # 应为 6.1.x-rk356x
 
@@ -1685,19 +1818,20 @@ sudo dd if=$FW/update.img of=/dev/sdX bs=4M conv=fsync status=progress
 | # | 报错信息 | 根本原因 | 解决方法 |
 | --- | --- | --- | --- |
 | 0 | `GitCommandError: 'var GIT_COMMITTER_IDENT' failed` / `提交者身份未知` | git 全局 `user.name` / `user.email` 未配置，`repo init` 末尾读不到身份 | 配好 git 身份（见 5.0） |
-| 1 | 改了 defconfig 但 `output/.config` 仍是 `focal` | 配置生成靠时间戳判断，`sed` 改文件不触发重新生成 | `rm -f output/.config` 后重新 `./build.sh defconfig:...`（见 7.3） |
-| 2 | `Your python2 is missing for U-Boot` | `check-loader.sh` 只检查 `which python2`，但 rk3568 配置下 `PYTHON` 仅用于 `pylibfdt`，而 `CONFIG_PYLIBFDT` / `SPL_OF_PLATDATA` 均未启用，Python 2 从未被真正调用 | 建转发到 python3 的 shim（见 3.2） |
-| 3 | `ERROR: No 'dtc'` | 缺少 `device-tree-compiler` | `sudo apt install device-tree-compiler` |
-| 4 | `fdtget: libfdt.so.1: cannot open` | `device-tree-compiler` 的运行库是独立包 | 补装 `libfdt1` |
-| 5 | `flex: not found` / `bison: not found` | 内核 Kconfig 解析需要 | `sudo apt install flex bison` |
-| 6 | `lz4: command not found` | 内核镜像压缩需要 | `sudo apt install lz4` |
-| 7 | `Your python-is-python3 is missing` | `check-kernel.sh` 检查 `python` 命令 | `sudo apt install python-is-python3` |
-| 8 | `sudo: A terminal is required to authenticate` | rootfs 阶段需要 mount/chroot 提权 | 在有 TTY 的终端执行，或临时开免密（见 8.3） |
-| 9 | `rkdeveloptool ul update.img` 显示成功但一秒结束 | `ul` 只是写 loader，不解析固件 | 改用 SDK 自带 `upgrade_tool UF`（见 10.4） |
-| 10 | 板子启动卡 `(initramfs)`，报 `FEATURE_C12` | 宿主机 `mkfs.ext4` 默认开启 `orphan_file`，镜像内 e2fsck 1.46.5 不认识 | **编译前**改 `mk-image.sh` 加 `-O ^orphan_file`（见 9.5）；已编好的用 `sudo tune2fs -O ^orphan_file` 补救 |
-| 11 | `menuconfig` 报 `Unable to find the ncurses libraries`，但 `libncurses-dev` 明明已装 | GCC 15 默认 C23，`check-lxdialog.sh` 里 `main() {}` 无返回类型成为**错误**；脚本把任何编译失败都误报成缺 ncurses | `HOST_EXTRACFLAGS="-Wno-implicit-int" ./build.sh menuconfig`（见 3.3） |
-| 12 | rootfs 阶段刷出大量 `rm: cannot remove 'binary/sys/...': Operation not permitted`，随后 `build_ubuntu failed` | `binary/` 里残留了 `proc`/`sys`/`dev` 挂载（上次中断没卸载），`rm -rf` 删不掉内核映射 | `sudo umount -l binary/proc binary/sys binary/dev` 后重跑（见 8.5） |
-| 13 | rootfs 打包时仅 4 行 `tar: binary/proc/... Cannot open: Permission denied`，脚本却"成功"了 | 同 12 的根因：`ch-mount.sh -u` 的 `sudo umount` 因密码超时失败，脚本不检查返回值就 `tar`，把宿主机 `/proc` 打进包 | 先 `sudo -v` 再编译；已中招则杀掉 tar、卸载、删废包（见 8.6） |
+| 1 | 选了 noble 但 `./build.sh ubuntu` 报 `cd: ubuntu24.04: No such file or directory` | SDK 只带 `ubuntu20.04` / `ubuntu22.04`，Kconfig 有 noble 选项但上游没提供目录 | 从 `ubuntu22.04` 复制改造（见 7.2） |
+| 2 | 改了 defconfig 但 `output/.config` 仍是旧版本 | 配置生成靠时间戳判断，`sed` 改文件不触发重新生成 | `rm -f output/.config` 后重新 `./build.sh defconfig:...`（见 7.5） |
+| 3 | `Your python2 is missing for U-Boot` | `check-loader.sh` 只检查 `which python2`，但 rk3568 配置下 `PYTHON` 仅用于 `pylibfdt`，而 `CONFIG_PYLIBFDT` / `SPL_OF_PLATDATA` 均未启用，Python 2 从未被真正调用 | 建转发到 python3 的 shim（见 3.2） |
+| 4 | `ERROR: No 'dtc'` | 缺少 `device-tree-compiler` | `sudo apt install device-tree-compiler` |
+| 5 | `fdtget: libfdt.so.1: cannot open` | `device-tree-compiler` 的运行库是独立包 | 补装 `libfdt1` |
+| 6 | `flex: not found` / `bison: not found` | 内核 Kconfig 解析需要 | `sudo apt install flex bison` |
+| 7 | `lz4: command not found` | 内核镜像压缩需要 | `sudo apt install lz4` |
+| 8 | `Your python-is-python3 is missing` | `check-kernel.sh` 检查 `python` 命令 | `sudo apt install python-is-python3` |
+| 9 | `sudo: A terminal is required to authenticate` | rootfs 阶段需要 mount/chroot 提权 | 在有 TTY 的终端执行，或临时开免密（见 8.3） |
+| 10 | `rkdeveloptool ul update.img` 显示成功但一秒结束 | `ul` 只是写 loader，不解析固件 | 改用 SDK 自带 `upgrade_tool UF`（见 10.4） |
+| 11 | `rsync`/`cp -a` 复制 `ubuntu22.04` 时刷出大量 `权限不够` | `binary/` 里是 root 属主文件（`/etc/shadow`、`/root`、`/etc/ssl/private`），普通用户读不了 | 用 `rsync --exclude binary --exclude '*.tar.gz' --exclude '*.img'`（见 7.2） |
+| 12 | `menuconfig` 报 `Unable to find the ncurses libraries`，但 `libncurses-dev` 明明已装 | GCC 15 默认 C23，`check-lxdialog.sh` 里 `main() {}` 无返回类型成为**错误**；脚本把任何编译失败都误报成缺 ncurses | `HOST_EXTRACFLAGS="-Wno-implicit-int" ./build.sh menuconfig`（见 3.3） |
+| 13 | rootfs 阶段刷出大量 `rm: cannot remove 'binary/sys/...': Operation not permitted`，随后 `build_ubuntu failed` | `binary/` 里残留了 `proc`/`sys`/`dev` 挂载（上次中断没卸载），`rm -rf` 删不掉内核映射 | `sudo umount -l binary/proc binary/sys binary/dev` 后重跑（见 8.5） |
+| 14 | rootfs 打包时仅 4 行 `tar: binary/proc/... Cannot open: Permission denied`，脚本却"成功"了 | 同 13 的根因：`ch-mount.sh -u` 的 `sudo umount` 因密码超时失败，脚本不检查返回值就 `tar`，把宿主机 `/proc` 打进包 | 先 `sudo -v` 再编译；已中招则杀掉 tar、卸载、删废包（见 8.6） |
 
 ---
 
@@ -1723,7 +1857,7 @@ SDK 放在了 NTFS / exFAT / 网络盘上。用 `findmnt -T ~/LubanCat_SDK` 确�
 
 **Q1b：**rootfs 阶段满屏 `Operation not permitted`，最后 `build_ubuntu failed`
 
-不是权限问题，是 `ubuntu22.04/binary/` 里残留了上次中断留下的 `proc`/`sys`/`dev` 挂载，
+不是权限问题，是 `ubuntu24.04/binary/` 里残留了上次中断留下的 `proc`/`sys`/`dev` 挂载，
 导致 `rm -rf` 删不掉。一行确认：
 
 ```bash
@@ -1733,7 +1867,7 @@ grep LubanCat_SDK /proc/mounts    # 有输出就是残留
 清理后重跑：
 
 ```bash
-cd ~/LubanCat_SDK/ubuntu22.04
+cd ~/LubanCat_SDK/ubuntu24.04
 sudo umount -l binary/proc binary/sys binary/dev
 grep "$PWD/binary" /proc/mounts   # 应为空
 cd ~/LubanCat_SDK && sudo ./build.sh ubuntu
@@ -1799,8 +1933,8 @@ sudo apt install --only-upgrade e2fsprogs
 删掉 rootfs 镜像即可，脚本会根据文件是否存在决定是否跳过：
 
 ```bash
-rm -f ubuntu22.04/ubuntu-rk356x-xfce-rootfs.img
-rm -f ubuntu22.04/ubuntu-base-*.tar.gz      # 连基础包一起重做时才需要
+rm -f ubuntu24.04/ubuntu-rk356x-xfce-rootfs.img
+rm -f ubuntu24.04/ubuntu-base-*.tar.gz      # 连基础包一起重做时才需要
 ./build.sh ubuntu
 ```
 
@@ -1808,9 +1942,9 @@ rm -f ubuntu22.04/ubuntu-base-*.tar.gz      # 连基础包一起重做时才需�
 
 ```bash
 cd ~/LubanCat_SDK
-dumpe2fs -h ubuntu22.04/ubuntu-rk356x-xfce-rootfs.img 2>/dev/null | head -5
+dumpe2fs -h ubuntu24.04/ubuntu-rk356x-xfce-rootfs.img 2>/dev/null | head -5
 # 再看镜像内的模块目录
-sudo mount -o loop,ro ubuntu22.04/ubuntu-rk356x-xfce-rootfs.img /tmp/chk
+sudo mount -o loop,ro ubuntu24.04/ubuntu-rk356x-xfce-rootfs.img /tmp/chk
 ls /tmp/chk/lib/modules/
 sudo umount /tmp/chk
 ```
@@ -1851,12 +1985,12 @@ sudo umount /tmp/chk
 | --- | --- | --- | --- |
 | `01-install-deps.sh` | **第二章 + 第三章** | 装依赖包、建 `qemu-aarch64-static` 软链、建 `python2` shim、检查 binfmt | 编译前的环境准备（不涉及 SDK） |
 | `02-fetch-sdk.sh` | **第四章 + 第五章** | 装 `repo`、git 调优、校验文件系统类型、`repo init` + `repo sync` | 拉取源码，得到 `~/LubanCat_SDK` |
-| `03-build-ubuntu22.sh` | **第六章 ~ 第九章** | 选 defconfig、改 JAMMY、清 `.config` 缓存、分步编译、检查 ext4 特性 | 真正的编译与打包全过程 |
+| `03-build-ubuntu24.sh` | **第六章 ~ 第九章** | 选 defconfig、改 NOBLE、清 `.config` 缓存、分步编译、检查 ext4 特性 | 真正的编译与打包全过程 |
 
 **逻辑关系是串行的，必须按顺序执行：**
 
 ```
-01-install-deps.sh          02-fetch-sdk.sh          03-build-ubuntu22.sh
+01-install-deps.sh          02-fetch-sdk.sh          03-build-ubuntu24.sh
    （装环境）        →        （拉源码）       →       （配置 + 编译）
         ↓                        ↓                         ↓
    宿主机就绪              ~/LubanCat_SDK 出现        update.img 产出
@@ -1886,24 +2020,24 @@ cd ~/rk3568
 ./scripts/02-fetch-sdk.sh
 
 # 第三步：配置 + 编译（rootfs 阶段需 sudo，建议在真实终端里跑）
-./scripts/03-build-ubuntu22.sh
+./scripts/03-build-ubuntu24.sh
 ```
 
 第三个脚本支持的开关：
 
 ```bash
-./scripts/03-build-ubuntu22.sh              # 默认：XFCE + 6.1 内核，分步编译
-DESKTOP=lite ./scripts/03-build-ubuntu22.sh # 无桌面版
-KERNEL=5.10  ./scripts/03-build-ubuntu22.sh # 换 5.10 内核
-JOBS=24      ./scripts/03-build-ubuntu22.sh # 并行度
-DO_BUILD=0   ./scripts/03-build-ubuntu22.sh # 只改配置不编译，用于复核
+./scripts/03-build-ubuntu24.sh              # 默认：XFCE + 6.1 内核，分步编译
+DESKTOP=lite ./scripts/03-build-ubuntu24.sh # 无桌面版
+KERNEL=5.10  ./scripts/03-build-ubuntu24.sh # 换 5.10 内核
+JOBS=24      ./scripts/03-build-ubuntu24.sh # 并行度
+DO_BUILD=0   ./scripts/03-build-ubuntu24.sh # 只改配置不编译，用于复核
 ```
 
 `DO_BUILD=0` 这个开关很实用，可以先确认配置对不对：
 
 ```bash
-DO_BUILD=0 ./scripts/03-build-ubuntu22.sh
-grep RK_UBUNTU_VERSION ~/LubanCat_SDK/output/.config   # 应为 jammy
+DO_BUILD=0 ./scripts/03-build-ubuntu24.sh
+grep RK_UBUNTU_VERSION ~/LubanCat_SDK/output/.config   # 应为 noble
 ```
 
 ### 15.4 脚本里已经内置的坑规避
@@ -1914,7 +2048,8 @@ grep RK_UBUNTU_VERSION ~/LubanCat_SDK/output/.config   # 应为 jammy
 | --- | --- |
 | 第三章 `qemu-aarch64-static` 缺失 | `01` 检测到不存在时自动建软链 |
 | 第三章 `python2` 缺失 | `01` 自动创建转发 shim 并写入 `~/.bashrc` |
-| 第七章 `.config` 缓存不刷新 | `03` 强制 `rm -f output/.config` 后重新生成，并校验结果必须是 `jammy` |
+| 第七章 SDK 缺 `ubuntu24.04` 目录 | `03` 启动时检测，不存在则从 `ubuntu22.04` 用 `rsync --exclude` 自动补齐并改三处 |
+| 第七章 `.config` 缓存不刷新 | `03` 强制 `rm -f output/.config` 后重新生成，并校验结果必须是 `noble` |
 | 第七章 defconfig 的 choice 冲突 | `03` 做幂等重建，保证 `=y` 恰好一行 |
 | 第九章 `orphan_file` | `03` 在打包前自动检测并移除 |
 | 第十章烧错工具 | `03` 结束时提示用 `upgrade_tool UF`，而非 `rkdeveloptool ul` |
@@ -1943,9 +2078,18 @@ grep RK_UBUNTU_VERSION ~/LubanCat_SDK/output/.config   # 应为 jammy
 □  6. repo init -m lubancat_linux_generic.xml
 □  7. .repo/repo/repo sync -c -j4
 □  8. ./build.sh chip:rk3566_rk3568:LubanCat_rk3568_ubuntu_xfce_defconfig
-□  9. 改 defconfig：关 FOCAL，开 JAMMY
+□  8b. 补齐 ubuntu24.04 目录：
+       rsync -a --exclude binary --exclude '*.tar.gz' --exclude '*.img' \
+         ubuntu22.04/ ubuntu24.04/
+       sed -i 's/\bjammy\b/noble/g' ubuntu24.04/sources.list
+       sed -i 's|ubuntu-base-22\.04\.5-base-|ubuntu-base-24.04.5-base-|g; \
+              s|releases/22\.04/release|releases/24.04/release|g' ubuntu24.04/mk-base-ubuntu.sh
+       for f in mk-base-ubuntu.sh mk-image.sh mk-ubuntu-rootfs.sh; do
+         bash -n ubuntu24.04/$f || echo "$f 语法错误"; done
+□  9. 改 defconfig：关 FOCAL/JAMMY，开 NOBLE
 □ 10. rm -f output/.config output/.config.old
-□ 11. 复核：grep RK_UBUNTU_VERSION output/.config  →  必须是 jammy
+□ 11. 复核：grep RK_UBUNTU_VERSION output/.config  →  必须是 noble
+□ 11b. 再确认目录真的存在：ls -d ~/LubanCat_SDK/ubuntu24.04
 □ 12. ./build.sh loader
 □ 13. ./build.sh kernel
 □ 14. sudo -v  &&  ./build.sh ubuntu   （先认证 sudo，最耗时，建议带 TTY）
@@ -2000,14 +2144,25 @@ repo init --depth=1 \
   -b linux -m lubancat_linux_generic.xml
 .repo/repo/repo sync -c -j4
 
-# ── 配置成 Ubuntu 22.04 ───────────────────────────
+# ── 补齐 ubuntu24.04 目录（SDK 不自带）─────────────
+rsync -a --exclude binary --exclude '*.tar.gz' --exclude '*.img' \
+  ubuntu22.04/ ubuntu24.04/
+sed -i 's/\bjammy\b/noble/g' ubuntu24.04/sources.list
+sed -i 's|ubuntu-base-22\.04\.5-base-|ubuntu-base-24.04.5-base-|g; \
+        s|releases/22\.04/release|releases/24.04/release|g' ubuntu24.04/mk-base-ubuntu.sh
+for f in mk-base-ubuntu.sh mk-image.sh mk-ubuntu-rootfs.sh; do
+  bash -n ubuntu24.04/$f || echo "!! $f 语法错误"
+done
+
+# ── 配置成 Ubuntu 24.04 ───────────────────────────
 ./build.sh chip:rk3566_rk3568:LubanCat_rk3568_ubuntu_xfce_defconfig
 CFG=device/rockchip/.chips/rk3566_rk3568/LubanCat_rk3568_ubuntu_xfce_defconfig
 sed -i -E 's/^RK_UBUNTU_(FOCAL|JAMMY|NOBLE)=y/# RK_UBUNTU_\1 is not set/' $CFG
-sed -i '1i RK_UBUNTU_JAMMY=y' $CFG
+sed -i '1i RK_UBUNTU_NOBLE=y' $CFG
 rm -f output/.config output/.config.old
 ./build.sh defconfig:LubanCat_rk3568_ubuntu_xfce_defconfig
-grep RK_UBUNTU_VERSION output/.config     # 必须显示 jammy
+grep RK_UBUNTU_VERSION output/.config     # 必须显示 noble
+ls -d ubuntu24.04                         # 必须存在
 
 # ── 编译 ──────────────────────────────────────────
 ./build.sh loader
@@ -2017,7 +2172,7 @@ sudo -v                   # 关键：提前认证，避免 rootfs 打包时 umou
 ./build.sh firmware
 
 # ── 烧录前检查 ext4 特性 ──────────────────────────
-IMG=ubuntu22.04/ubuntu-rk356x-xfce-rootfs.img
+IMG=ubuntu24.04/ubuntu-rk356x-xfce-rootfs.img
 dumpe2fs -h $IMG 2>/dev/null | grep -q orphan_file && {
   sudo tune2fs -O ^orphan_file $IMG
   ./build.sh firmware
