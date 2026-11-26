@@ -9,8 +9,6 @@
 | 目标系统 | 分支 | 桌面 | 内核 | 状态 |
 | --- | --- | --- | --- | --- |
 | Ubuntu 22.04 LTS (jammy) | [`ubuntu/jammy`](../../tree/ubuntu/jammy) | XFCE | 6.1 | ✅ 已上板验证 |
-| Ubuntu 20.04 LTS (focal) | `ubuntu/focal` | — | — | ⬜ 待补充 |
-| Debian 12 (bookworm) | `debian/bookworm` | — | — | ⬜ 待补充 |
 
 ## 快速开始
 
