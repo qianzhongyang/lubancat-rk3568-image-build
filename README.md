@@ -45,7 +45,7 @@
 四、安装 repo 工具
 五、拉取通用 SDK .......... git 身份检查 + manifest 说明 + 网络问题处理
 六、选择板卡配置 .......... 选定 rk3568 defconfig
-七、补齐 ubuntu24.04 目录 ⚠️ 从 22.04 复制改造 + 切 noble + 清缓存
+七、补齐 ubuntu24.04 目录 ⚠️ 从 22.04 复制改造 + 切 noble + 编译前总检查
 八、编译 .................. 分步编译与耗时参考
 九、ext4 特性说明 ......... 24.04 不再踩坑，但脚本仍显式关闭
 十、打包产物与烧录 ........ 正确工具是 upgrade_tool
@@ -1935,6 +1935,7 @@ sudo dd if=$FW/update.img of=/dev/sdX bs=4M conv=fsync status=progress
 | 12 | `menuconfig` 报 `Unable to find the ncurses libraries`，但 `libncurses-dev` 明明已装 | GCC 15 默认 C23，`check-lxdialog.sh` 里 `main() {}` 无返回类型成为**错误**；脚本把任何编译失败都误报成缺 ncurses | `HOST_EXTRACFLAGS="-Wno-implicit-int" ./build.sh menuconfig`（见 3.3） |
 | 13 | rootfs 阶段刷出大量 `rm: cannot remove 'binary/sys/...': Operation not permitted`，随后 `build_ubuntu failed` | `binary/` 里残留了 `proc`/`sys`/`dev` 挂载（上次中断没卸载），`rm -rf` 删不掉内核映射 | `sudo umount -l binary/proc binary/sys binary/dev` 后重跑（见 8.5） |
 | 14 | rootfs 打包时仅 4 行 `tar: binary/proc/... Cannot open: Permission denied`，脚本却"成功"了 | 同 13 的根因：`ch-mount.sh -u` 的 `sudo umount` 因密码超时失败，脚本不检查返回值就 `tar`，把宿主机 `/proc` 打进包 | 先 `sudo -v` 再编译；已中招则杀掉 tar、卸载、删废包（见 8.6） |
+| 15 | `Your display is too small to run Menuconfig!`，`It must be at least 19 lines by 80 columns.` | ncurses 硬性尺寸检查（`dialog.h`: `WINDOW_HEIGTH_MIN 19` / `WINDOW_WIDTH_MIN 80`），Cursor 内置终端面板高度不足时必现。配置本身不受影响，`menuconfig` 在进界面前就退出了 | 把终端面板拉高，或用独立 SSH 终端；也可以跳过 menuconfig，直接 `grep` 复核 `output/.config`（见 7.4） |
 
 ---
 
