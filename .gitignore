@@ -1,0 +1,14 @@
+# 编译产物与临时文件
+output/
+*.img
+*.tar.gz
+*.log
+
+# 若把 SDK 拉到了本仓库目录内（默认在 ~/LubanCat_SDK），不要提交
+LubanCat_SDK/
+
+# 编辑器与系统
+.vscode/
+.idea/
+*.swp
+.DS_Store
