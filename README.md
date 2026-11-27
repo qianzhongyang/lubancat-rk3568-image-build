@@ -235,14 +235,31 @@ repo init --depth=1 \
 
 # 方式二：repo 本体走 github 中转站（中科大镜像不可用时的备选）
 repo init --depth=1 \
+  --repo-url https://gh-proxy.org/https://github.com/GerritCodeReview/git-repo \
   -u https://gh-proxy.org/https://github.com/LubanCat/manifests.git \
   -b linux -m lubancat_linux_generic.xml
 ```
 
 两条命令**选一条执行**即可，先试方式一，拉不动再换成方式二。
 
+> ⚠️ **方式二的** `--repo-url` **不能省。** `.repo/repo` 一旦存在，`repo init` 就只改写
+> 它的 remote 配置、不再重新克隆。若省掉 `--repo-url`，repo 本体仍沿用上一步方式一留下的
+> 中科大地址——中转站只加速了 manifests，repo 工具本身根本没换。
+>
+> 而 `gh-proxy` **只能转发** `github.com` **的地址**，转不了 `gerrit.googlesource.com`
+> （实测报「仓库未找到」）。所以方式二填 GitHub 上的官方镜像 `GerritCodeReview/git-repo`，
+> 它和 `gerrit.googlesource.com/git-repo` 是同一个仓库，实测 commit 完全一致。
+
 > ⚠️ **中科大镜像的路径是** `/aosp/git-repo`**，不是** `/git/git-repo`**。**
 > 网上不少教程写的是 `mirrors.ustc.edu.cn/git/git-repo`，这个地址现在返回「仓库未找到」，不要用。
+
+如果方式一已经失败、`.repo` 里留了半成品，切方式二前先清掉：
+
+```bash
+cd ~/LubanCat_SDK
+rm -rf .repo                       # 清掉半成品，避免沿用旧的 repo 源
+# 然后执行上面的方式二
+```
 
 init 成功的标志：
 
@@ -852,7 +869,7 @@ rootfs 分区是 `0x00c00000` 扇区 = **6.0 GB**（`python3 -c "print(0x00c0000
 | `GitCommandError: 'var GIT_COMMITTER_IDENT' failed` | git 全局身份未配置 | 见 3.1 |
 | `GnuTLS recv error (-110)` | GitHub 的 git 通道被 RST | 见下方调优 |
 | `Cannot get .../git-repo/clone.bundle` | 缺 `--repo-url` | 加上镜像地址（见 3.2） |
-| 中科大镜像拉 repo 本体失败 | 镜像临时不可用 | 换 `gh-proxy` 中转（见 3.2 方式二） |
+| 中科大镜像拉 repo 本体失败 | 镜像临时不可用 | 换 `gh-proxy` 中转，`--repo-url` 必须一起换（见 3.2 方式二） |
 | `Repo command failed: UpdateManifestError` | 清单半成品损坏 | `rm -rf ~/LubanCat_SDK/.repo/manifests*` 后重跑 init |
 | `Current user is not the owner of SDK source` | 之前用 root 跑过 | `sudo chown -h -R $USER:$USER ~/LubanCat_SDK` |
 
