@@ -51,7 +51,7 @@
 十、打包产物与烧录 ........ 正确工具是 upgrade_tool
 十一、首次登录 ............ 默认账号密码
 十二、踩坑汇总 ............ 踩坑对照表
-十三、常见问题 FAQ
+十三、常见问题 FAQ ........ 含中文化、输入法、报错排查
 十四、参考资料
 十五、配套脚本 ............ scripts/ 三个脚本与本文章节的对应关系
 十六、编译清单 ............ 打勾对照
@@ -1962,6 +1962,7 @@ sudo dd if=$FW/update.img of=/dev/sdX bs=4M conv=fsync status=progress
 | 12 | `menuconfig` 报 `Unable to find the ncurses libraries`，但 `libncurses-dev` 明明已装 | GCC 15 默认 C23，`check-lxdialog.sh` 里 `main() {}` 无返回类型成为**错误**；脚本把任何编译失败都误报成缺 ncurses | `HOST_EXTRACFLAGS="-Wno-implicit-int" ./build.sh menuconfig`（见 3.3） |
 | 13 | rootfs 阶段刷出大量 `rm: cannot remove 'binary/sys/...': Operation not permitted`，随后 `build_ubuntu failed` | `binary/` 里残留了 `proc`/`sys`/`dev` 挂载（上次中断没卸载），`rm -rf` 删不掉内核映射 | `sudo umount -l binary/proc binary/sys binary/dev` 后重跑（见 8.5） |
 | 14 | rootfs 打包时仅 4 行 `tar: binary/proc/... Cannot open: Permission denied`，脚本却"成功"了 | 同 13 的根因：`ch-mount.sh -u` 的 `sudo umount` 因密码超时失败，脚本不检查返回值就 `tar`，把宿主机 `/proc` 打进包 | 先 `sudo -v` 再编译；已中招则杀掉 tar、卸载、删废包（见 8.6） |
+| 15 | 烧录成功、系统能进桌面，但界面全是英文 | SDK 的 `mk-ubuntu-rootfs.sh` 只有 `export LC_ALL=C.UTF-8`，从未装 `language-pack-zh-hans` / `fonts-noto-cjk`，也没跑过 `locale-gen` | 板子上装语言包 + 字体后 `update-locale`，或改脚本重编（见 FAQ Q12） |
 | 15 | `Your display is too small to run Menuconfig!`，`It must be at least 19 lines by 80 columns.` | ncurses 硬性尺寸检查（`dialog.h`: `WINDOW_HEIGTH_MIN 19` / `WINDOW_WIDTH_MIN 80`），Cursor 内置终端面板高度不足时必现。配置本身不受影响，`menuconfig` 在进界面前就退出了 | 把终端面板拉高，或用独立 SSH 终端；也可以跳过 menuconfig，直接 `grep` 复核 `output/.config`（见 7.4） |
 
 ---
@@ -2079,6 +2080,127 @@ sudo mount -o loop,ro ubuntu24.04/ubuntu-rk356x-xfce-rootfs.img /tmp/chk
 ls /tmp/chk/lib/modules/
 sudo umount /tmp/chk
 ```
+
+**Q12：桌面全是英文，怎么换成中文？**
+
+**这不是你操作错了，是 SDK 本身就没做中文适配。** `mk-ubuntu-rootfs.sh` 里
+关于语言只有一行：
+
+```startLine:204:204:mk-ubuntu-rootfs.sh
+export LC_ALL=C.UTF-8
+```
+
+`C.UTF-8` 是纯英文 locale，而整个脚本里以下东西一个都没装、没配：
+
+| 缺失项 | 后果 |
+| --- | --- |
+| `language-pack-zh-hans` | 没有中文翻译文件，界面全英文 |
+| `fonts-noto-cjk` | 没有中文字体，即便有翻译也会显示成方块（豆腐块）|
+| `locale-gen zh_CN.UTF-8` | 系统里根本不存在这个 locale |
+| `/etc/default/locale` | 没有任何默认语言设置 |
+| `fcitx5` / `ibus` | 无法输入中文（这个和界面语言是两件事）|
+
+所以**烧录后的桌面必然是英文的**，跟 24.04 / 22.04 无关，两个版本都一样。
+
+#### 方案一：在板子上直接装（推荐，约 10 分钟）
+
+不重新编译镜像，SSH 登录板子后执行：
+
+```bash
+# 1. 更新软件源（SDK 打包时删了 /var/lib/apt/lists，首次会慢一些）
+sudo apt update
+
+# 2. 中文语言包 + 中文字体（重要：没有字体中文会变方块）
+sudo apt install -y language-pack-zh-hans language-pack-zh-hans-base \
+                    fonts-noto-cjk fonts-noto-cjk-extra
+
+# 3. 生成中文 locale
+sudo locale-gen zh_CN.UTF-8
+
+# 4. 设为系统默认语言
+sudo update-locale LANG=zh_CN.UTF-8 LANGUAGE=zh_CN:zh
+
+# 5. 确认生效
+locale -a | grep zh_CN
+cat /etc/default/locale
+```
+
+**然后注销重新登录**（或 `sudo reboot`），桌面即为中文。
+
+如果重启后仍是英文，说明 Xfce 会话没读到系统 locale，手动设一次：
+
+> **Applications → Settings → Language Support** → Language 选「汉语（中国）」→ Log Out
+
+#### 方案二：需要打中文（输入法）
+
+界面中文化只是显示，**要输入中文必须另装输入法**：
+
+```bash
+sudo apt install -y fcitx5 fcitx5-chinese-addons \
+                    fcitx5-frontend-gtk3 fcitx5-frontend-qt5
+
+# 设为默认输入法框架
+im-config -n fcitx5
+```
+
+注销重登后，系统托盘会出现 fcitx5 图标，`Ctrl+Space` 切换中英文。
+
+> 如果托盘没有出现，检查是否装了 Xfce 的面板插件：
+> `sudo apt install fcitx5-frontend-gtk3` 后重新登录；
+> 或手动启动一次 `fcitx5 -d`。
+
+#### 方案三：改进 SDK，重新编译带中文的镜像
+
+如果想把中文做进镜像（方便分享给别人），改 `ubuntu24.04/mk-ubuntu-rootfs.sh`，
+在 chroot 段的 `apt-get update` 之后插入：
+
+```bash
+# 中文化（加在 ${APT_INSTALL} 变量定义之后、desktop 安装之前）
+${APT_INSTALL} language-pack-zh-hans language-pack-zh-hans-base \
+               fonts-noto-cjk fonts-noto-cjk-extra fcitx5 fcitx5-chinese-addons
+
+# 生成并设为默认
+locale-gen zh_CN.UTF-8
+update-locale LANG=zh_CN.UTF-8 LANGUAGE=zh_CN:zh
+```
+
+注意脚本里 `export LC_ALL=C.UTF-8` 那行**不要删**——它是构建期用的，
+保证 apt 输出不出现乱码。真正影响用户桌面的是 `update-locale` 写进
+`/etc/default/locale` 的值。
+
+改完重新编译 rootfs（60~90 分钟）：
+
+```bash
+rm -f ubuntu24.04/ubuntu-rk356x-xfce-rootfs.img
+./build.sh ubuntu
+./build.sh firmware
+```
+
+#### 空间占用参考
+
+| 包 | 大小 |
+| --- | --- |
+| `language-pack-zh-hans(-base)` | 约 30 MB |
+| `fonts-noto-cjk(-extra)` | 约 100 MB |
+| `fcitx5` 全家桶 | 约 50 MB |
+| **合计** | **约 200 MB** |
+
+装之前先看剩余空间，`/` 使用率超过 85% 的话建议先清理：
+
+```bash
+df -h /
+```
+
+#### 常见问题
+
+- **中文显示成方块** → 只装了语言包没装字体，补 `fonts-noto-cjk`
+- **`locale-gen` 报 `zh_CN.UTF-8` 不存在** → 先装 `language-pack-zh-hans`，
+  它会带上 `/usr/share/i18n/locales/zh_CN`
+- **`apt update` 很慢** → SDK 打包时删了包索引，首次需要完整拉一遍，
+  之后正常。可以换更快的中科大盘：
+  `sudo sed -i 's/mirrors.aliyun.com/mirrors.ustc.edu.cn/g' /etc/apt/sources.list`
+- **输入法装了但打不出中文** → `im-config -n fcitx5` 后必须注销重登，
+  `im-config` 的设置在登录时生效
 
 ---
 
