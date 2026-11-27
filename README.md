@@ -22,36 +22,81 @@
 
 ---
 
-## 全流程速览
+## 一图看懂全流程
 
-按顺序执行，**粗体**是需要特别注意的命令：
+> 如果你的编辑器不渲染下面的流程图，可以直接看后面的文字版。
 
-| 步骤 | 命令 | 耗时 |
-| --- | --- | --- |
-| 1 | 装依赖 `apt install ...`（见 1.2） | 几分钟 |
-| 2 | **`sudo ln -sf /usr/bin/qemu-aarch64 /usr/bin/qemu-aarch64-static`** | 秒 |
-| 3 | **建 `~/bin/python2` shim 转发到 python3**（见 2.2） | 秒 |
-| 4 | `git config --global user.name/user.email` | 秒 |
-| 5 | `repo init` + `repo sync`（约 18 GB） | 十几分钟~1 小时 |
-| 6 | `./build.sh chip:rk3566_rk3568:LubanCat_rk3568_ubuntu_xfce_defconfig` | 秒 |
-| 7 | **补齐 `ubuntu24.04/` 目录**（rsync + 改三处，见 4.2~4.3） | 几分钟 |
-| 8 | 改 defconfig 开 NOBLE（见 4.4） | 秒 |
-| 9 | **`rm -f output/.config` 并重新生成**（见 4.5，不改等于没改） | 秒 |
-| 10 | `./build.sh loader` | 十几秒 |
-| 11 | `./build.sh kernel` | 10~20 分钟 |
-| 12 | **`sudo -v` 然后 `./build.sh ubuntu`**（见 5.3，必须先认证 sudo） | **60~90 分钟** |
-| 13 | 校验 ext4 特性 + `./build.sh firmware`（见 5.4） | 半分钟 |
-| 14 | `sudo upgrade_tool UF output/firmware/update.img`（见 6.3） | 几分钟 |
-| 15 | 上电，串口 1500000 登录 `cat` / `temppwd` | — |
+```mermaid
+flowchart TD
+    A["1. 环境准备<br/>Ubuntu 22.04/24.04/26.04<br/>磁盘 ≥ 60GB + ext4"] --> B["2. 安装依赖<br/>apt install 一大串"]
+    B --> C["3. 系统级配置 ⚠️<br/>qemu-aarch64-static 软链<br/>python/python2 处理"]
+    C --> D["4. 安装 repo<br/>repo init + repo sync<br/>约 18GB"]
+    D --> E["5. 选板卡<br/>./build.sh chip:rk3566_rk3568:xxx"]
+    E --> F["6. 补齐 ubuntu24.04 ⚠️<br/>从 22.04 复制改造"]
+    F --> G["7. 改 noble + 清缓存<br/>rm output/.config"]
+    G --> G2["8. 修 mk-image.sh<br/>关掉 orphan_file"]
+    G2 --> H1["9. ./build.sh loader<br/>十几秒"]
+    H1 --> H2["10. ./build.sh kernel<br/>10~20 分钟"]
+    H2 --> H3["11. ./build.sh ubuntu<br/>60~90 分钟 ⏳"]
+    H3 --> I{"12. 复核镜像<br/>含 orphan_file?"}
+    I -->|有| J["tune2fs -O ^orphan_file<br/>补救"]
+    I -->|没有| K
+    J --> K["13. ./build.sh firmware<br/>打包 update.img"]
+    K --> L["14. upgrade_tool UF<br/>烧写整包"]
+    L --> M["15. 上电启动<br/>cat / temppwd"]
 
-### 四个必看的坑
+    style C fill:#ffe6cc,stroke:#d79b00
+    style F fill:#f8cecc,stroke:#b85450
+    style G fill:#ffe6cc,stroke:#d79b00
+    style I fill:#fff2cc,stroke:#d6b656
+    style J fill:#f8cecc,stroke:#b85450
+    style H3 fill:#d5e8d4,stroke:#82b366
+```
 
-| 坑 | 后果 | 解法 |
-| --- | --- | --- |
-| git 身份未配置 | `repo init` 直接抛异常 | `git config --global user.name/user.email` |
-| python2 缺失 | `./build.sh loader` 直接退出 | 建 shim 转发到 python3（2.2） |
-| SDK 缺 `ubuntu24.04/` | `cd` 失败，编译中断 | 从 `ubuntu22.04` 复制改造（4.2） |
-| `output/.config` 不刷新 | 白等 60~90 分钟，编出的还是旧版 | 删掉重新生成（4.5） |
+**文字版流程**（编辑器不显示上图时看这个）：
+
+```
+[1] 环境准备（ext4 分区 + 60GB 空间）
+     ↓
+[2] sudo apt install 依赖包
+     ↓
+[3] 系统级配置：qemu-aarch64-static 软链 + python/python2 处理  ⚠️ 不做必失败
+     ↓
+[4] repo init + repo sync（拉 18GB 源码）
+     ↓
+[5] ./build.sh chip:rk3566_rk3568:LubanCat_rk3568_ubuntu_xfce_defconfig
+     ↓
+[6] 补齐 ubuntu24.04 目录（rsync 复制 ubuntu22.04，改 sources.list + 版本号）⚠️ SDK 不自带
+     ↓
+[7] 改 defconfig：RK_UBUNTU_FOCAL → RK_UBUNTU_NOBLE，并 rm output/.config
+     ↓
+[8] 改 ubuntu24.04/mk-image.sh 关掉 orphan_file（通用，建议保留）
+     ↓
+[9] ./build.sh loader        （十几秒）
+     ↓
+[10] ./build.sh kernel        （10~20 分钟）
+     ↓
+[11] sudo -v 然后 ./build.sh ubuntu （60~90 分钟，最耗时）⏳
+     ↓
+[12] 复核 ext4 特性：dumpe2fs -h ...rootfs.img | grep orphan_file
+     ├─ 有 → sudo tune2fs -O ^orphan_file 后重打固件
+     └─ 无 → 继续
+     ↓
+[13] ./build.sh firmware      （打包 update.img）
+     ↓
+[14] sudo upgrade_tool UF update.img                    ⚠️ 别用 rkdeveloptool
+     ↓
+[15] 上电启动，登录 cat / temppwd
+```
+
+### 四个必看的坑（不看会白折腾）
+
+| 坑 | 位置 | 后果 | 一句话解法 |
+| --- | --- | --- | --- |
+| **git 身份未配置** | 3.1 | `repo init` 直接抛异常退出 | `git config --global user.name/user.email` |
+| **python2 缺失** | 2.2 | `build.sh loader` 直接退出 | 建个转发到 python3 的 shim（并非真需要 Python 2） |
+| **SDK 缺 ubuntu24.04 目录** | 4.2 | 选 noble 后 `cd` 目标目录失败 | 从 `ubuntu22.04` 复制改造（本文给全命令） |
+| `.config` **缓存** | 4.5 | rootfs 编出来仍是旧版本，白等 60~90 分钟 | 删掉 `output/.config` 重新生成 |
 
 ---
 
@@ -520,11 +565,33 @@ else
 fi
 ```
 
-SDK 的 `ubuntu24.04/mk-image.sh` 里保留了 `MKFS_OPTS="-O ^orphan_file"`，理由是一套脚本兼容 22.04 / 24.04，且关闭它只损失一个性能优化，对功能零影响。
+**24.04 目标系统不需要改这一处**，因为它的 `e2fsck` 是 1.47.0，本身就认识 `orphan_file`。上面那段是保底措施：万一校验发现它有，`tune2fs` 直接移除即可，不用重编。
+
+官方 SDK 的 `mk-image.sh` 原文是这样（**没有**任何 `-O` 参数，会用上宿主机的全部默认特性）：
+
+```bash
+# ubuntu24.04/mk-image.sh（官方原版）
+IMAGE_SIZE_MB=$(( $(sudo du --apparent-size -sm ${TARGET_ROOTFS_DIR} | cut -f1) + ... ))
+IMAGE_SIZE_MB=$(( $IMAGE_SIZE_MB * 110 / 100 ))
+
+sudo mkfs.ext4 -d ${TARGET_ROOTFS_DIR} ${ROOTFSIMAGE} ${IMAGE_SIZE_MB}M
+```
+
+如果你想让 22.04 / 24.04 共用一套脚本、或者想从源头就规避这个特性，可以把最后一行改成：
+
+```bash
+sed -i 's|^sudo mkfs.ext4 -d|MKFS_OPTS="-O ^orphan_file"
+
+sudo mkfs.ext4 ${MKFS_OPTS} -d|' ubuntu24.04/mk-image.sh
+grep -n "MKFS_OPTS" ubuntu24.04/mk-image.sh    # 确认已插入
+bash -n ubuntu24.04/mk-image.sh                # 确认语法
+```
 
 > ⚠️ 反直觉的点：**不能**写成 `-O has_journal,ext_attr,...` 这样的特性列表。
 > `mkfs.ext4 -O` 后跟的特性是**追加**到默认集合上，不是替换，所以列再多个也删不掉 `orphan_file`。
 > 必须用 `^` 前缀显式关闭。
+
+> 关闭它只损失一个性能优化项（减少 fsck 时的扫描开销），对功能零影响。
 
 ### 5.5 只想重做 rootfs
 
