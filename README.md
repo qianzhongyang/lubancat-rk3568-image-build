@@ -73,14 +73,25 @@ flowchart TD
 | 磁盘 | **≥ 60 GB 空闲**（`.repo` 约 10 GB + 检出 8 GB + 构建产物 20 GB + 余量） |
 | 文件系统 | **必须 ext4**，不能是 NTFS / exFAT / 网络盘 |
 
-确认磁盘类型：
+确认磁盘类型与空间：
 
 ```bash
-df -h ~
-findmnt -T ~ | grep -o 'TYPE=[a-z0-9]*'
+df -h ~                          # 看剩余空间，至少 60G
+findmnt -no FSTYPE -T ~          # 看文件系统类型，必须是 ext4
 ```
 
-若不是 ext4，SDK 会报 `Please move SDK source code into an ext4 partition`。原因是脚本里大量 `chown`、`chmod`、符号链接操作，FAT 类文件系统不支持。
+期望输出类似（第一段是 `df` 的表，第二段是 `findmnt` 的结果）：
+
+```
+文件系统        大小  已用  可用 已用% 挂载点
+/dev/nvme0n1p3  929G   69G  813G    8% /
+
+ext4
+```
+
+若不是 ext4（显示 `ntfs`、`exfat`、`vfat`、`cifs` 等），SDK 会报
+`Please move SDK source code into an ext4 partition`——脚本里大量 `chown`、`chmod`、
+符号链接操作，FAT 类文件系统不支持这些。
 
 ### 1.2 安装依赖
 
