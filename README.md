@@ -8,8 +8,6 @@
 
 本文记录在 **Ubuntu 26.04** 上从零编出 **鲁班猫2（RK3568）Ubuntu 24.04 + XFCE + 6.1 内核** 镜像的全过程，每一步都是实测命令。
 
-> ⚠️ **最大前提**：SDK **没有** `ubuntu24.04/` 目录。直接选 noble 会因目标目录不存在而失败，必须自己补齐（见 4.2）。
-
 **目标成果**：约 4 GB 的 `update.img`，烧录后进入 XFCE 桌面。
 
 | 项目 | 说明 |
@@ -325,14 +323,15 @@ cd ~/LubanCat_SDK
 
 ### 4.2 补齐 `ubuntu24.04` 目录
 
-先确认 SDK 确实没有这个目录：
+**这是本文最关键的一步：官方 SDK 里没有 `ubuntu24.04/` 目录。** 先确认：
 
 ```bash
 ls -d ubuntu* debian*
 # 实际输出只有：ubuntu20.04  ubuntu22.04
 ```
 
-但 `mk-rootfs.sh` 会执行 `cd "$RK_UBUNTU_NUMBER"`，选了 noble 就是 `cd ubuntu24.04` → 目录不存在 → 整个 rootfs 构建在这一行断掉。
+而 `mk-rootfs.sh` 会执行 `cd "$RK_UBUNTU_NUMBER"`，选了 noble 就是 `cd ubuntu24.04`
+→ 目录不存在 → 整个 rootfs 构建在这一行断掉。所以必须自己补齐。
 
 从 `ubuntu22.04` 复制时**必须排除大件产物**（`binary/`、`.tar.gz`、`.img` 合计约 8 GB）：
 
