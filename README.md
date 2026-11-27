@@ -227,17 +227,22 @@ echo 'export PATH=$HOME/bin:$PATH' >> ~/.bashrc && source ~/.bashrc
 
 mkdir -p ~/LubanCat_SDK && cd ~/LubanCat_SDK
 
+# 方式一：repo 本体走中科大镜像，避免 gerrit.googlesource.com 拉不到
 repo init --depth=1 \
   --repo-url https://mirrors.ustc.edu.cn/aosp/git-repo \
   -u https://github.com/LubanCat/manifests.git \
   -b linux -m lubancat_linux_generic.xml
+
+# 方式二：repo 本体走 github 中转站（中科大镜像不可用时的备选）
+repo init --depth=1 \
+  -u https://gh-proxy.org/https://github.com/LubanCat/manifests.git \
+  -b linux -m lubancat_linux_generic.xml
 ```
 
-`--repo-url` 指定 repo 工具本身的来源（走中科大镜像，避免 `gerrit.googlesource.com` 拉不动）。
+两条命令**选一条执行**即可，先试方式一，拉不动再换成方式二。
 
-> ⚠️ 路径是 `/aosp/git-repo`，**不是** `/git/git-repo`。网上不少教程写的是后者，现在返回「仓库未找到」。
-
-`-m lubancat_linux_generic.xml` 指定用哪份清单，清单里固定了 13 个仓库的精确 commit。
+> ⚠️ **中科大镜像的路径是** `/aosp/git-repo`**，不是** `/git/git-repo`**。**
+> 网上不少教程写的是 `mirrors.ustc.edu.cn/git/git-repo`，这个地址现在返回「仓库未找到」，不要用。
 
 init 成功的标志：
 
@@ -847,6 +852,7 @@ rootfs 分区是 `0x00c00000` 扇区 = **6.0 GB**（`python3 -c "print(0x00c0000
 | `GitCommandError: 'var GIT_COMMITTER_IDENT' failed` | git 全局身份未配置 | 见 3.1 |
 | `GnuTLS recv error (-110)` | GitHub 的 git 通道被 RST | 见下方调优 |
 | `Cannot get .../git-repo/clone.bundle` | 缺 `--repo-url` | 加上镜像地址（见 3.2） |
+| 中科大镜像拉 repo 本体失败 | 镜像临时不可用 | 换 `gh-proxy` 中转（见 3.2 方式二） |
 | `Repo command failed: UpdateManifestError` | 清单半成品损坏 | `rm -rf ~/LubanCat_SDK/.repo/manifests*` 后重跑 init |
 | `Current user is not the owner of SDK source` | 之前用 root 跑过 | `sudo chown -h -R $USER:$USER ~/LubanCat_SDK` |
 
@@ -880,7 +886,7 @@ cd ~/LubanCat_SDK && rm -rf .repo    # 清掉半成品
 | `sudo: A terminal is required to authenticate` | 无 TTY | 在真实终端跑，或临时开免密（见 5.3） |
 | `rsync`/`cp -a` 刷大量「权限不够」 | `binary/` 是 root 属主 | 用 `rsync --exclude binary`（见 4.2） |
 
-**`Unable to find the ncurses libraries` 展开说明（GCC 15 专属）**
+`Unable to find the ncurses libraries` **展开说明（GCC 15 专属）**
 
 这条报错是**误导性的**，`libncurses-dev` 其实装着。真正原因是
 `kconfig/lxdialog/check-lxdialog.sh` 用这段代码测试 ncurses 能否链接：
@@ -1029,6 +1035,7 @@ wget -c https://mirrors.tuna.tsinghua.edu.cn/ubuntu-cdimage/ubuntu-base/releases
 - 野火在线文档《嵌入式 Linux 镜像构建与部署——基于 LubanCat-RK 系列板卡》：<https://doc.embedfire.com/linux/rk356x/build_and_deploy/zh/latest/index.html>
 - repo 工具中科大镜像：<https://mirrors.ustc.edu.cn/aosp/git-repo>（注意是 `/aosp/git-repo`）
 - repo 工具清华镜像（备选）：<https://mirrors.tuna.tsinghua.edu.cn/git/git-repo>
+- github 中转站（repo 本体备选）：<https://gh-proxy.org>
 - ext4 `orphan_file` 特性说明（e2fsprogs 1.47.0 引入）：<https://ext4.wiki.kernel.org/index.php/Ext4_Disk_Layout>
 - 瑞芯微烧写工具 `upgrade_tool`：SDK 内 `tools/linux/Linux_Upgrade_Tool/`
 
