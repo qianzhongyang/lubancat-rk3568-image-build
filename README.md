@@ -24,7 +24,7 @@
 
 ## 一图看懂全流程
 
-> 如果你的编辑器不渲染下面的流程图，可以直接看后面的文字版。
+> 下图是完整流程，每步的详细命令见对应章节。
 
 ```mermaid
 flowchart TD
@@ -51,42 +51,6 @@ flowchart TD
     style I fill:#fff2cc,stroke:#d6b656
     style J fill:#f8cecc,stroke:#b85450
     style H3 fill:#d5e8d4,stroke:#82b366
-```
-
-**文字版流程**（编辑器不显示上图时看这个）：
-
-```
-[1] 环境准备（ext4 分区 + 60GB 空间）
-     ↓
-[2] sudo apt install 依赖包
-     ↓
-[3] 系统级配置：qemu-aarch64-static 软链 + python/python2 处理  ⚠️ 不做必失败
-     ↓
-[4] repo init + repo sync（拉 18GB 源码）
-     ↓
-[5] ./build.sh chip:rk3566_rk3568:LubanCat_rk3568_ubuntu_xfce_defconfig
-     ↓
-[6] 补齐 ubuntu24.04 目录（rsync 复制 ubuntu22.04，改 sources.list + 版本号）⚠️ SDK 不自带
-     ↓
-[7] 改 defconfig：RK_UBUNTU_FOCAL → RK_UBUNTU_NOBLE，并 rm output/.config
-     ↓
-[8] 改 ubuntu24.04/mk-image.sh 关掉 orphan_file（通用，建议保留）
-     ↓
-[9] ./build.sh loader        （十几秒）
-     ↓
-[10] ./build.sh kernel        （10~20 分钟）
-     ↓
-[11] sudo -v 然后 ./build.sh ubuntu （60~90 分钟，最耗时）⏳
-     ↓
-[12] 复核 ext4 特性：dumpe2fs -h ...rootfs.img | grep orphan_file
-     ├─ 有 → sudo tune2fs -O ^orphan_file 后重打固件
-     └─ 无 → 继续
-     ↓
-[13] ./build.sh firmware      （打包 update.img）
-     ↓
-[14] sudo upgrade_tool UF update.img                    ⚠️ 别用 rkdeveloptool
-     ↓
-[15] 上电启动，登录 cat / temppwd
 ```
 
 ### 四个必看的坑（不看会白折腾）
