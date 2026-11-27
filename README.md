@@ -886,7 +886,8 @@ ubuntu20.04  ubuntu22.04
 grep -A12 'config RK_UBUNTU_VERSION' device/rockchip/common/configs/Config.in.ubuntu
 ```
 
-```startLine:23:32:device/rockchip/common/configs/Config.in.ubuntu
+```bash
+# device/rockchip/common/configs/Config.in.ubuntu 第 23~32 行
 config RK_UBUNTU_VERSION
 	string
 	default "focal" if RK_UBUNTU_FOCAL
@@ -902,7 +903,8 @@ config RK_UBUNTU_NUMBER
 
 而 `mk-rootfs.sh` 是这么进入构建目录的：
 
-```startLine:241:241:device/rockchip/common/scripts/mk-rootfs.sh
+```bash
+# device/rockchip/common/scripts/mk-rootfs.sh 第 241~241 行
 	cd "$RK_UBUNTU_NUMBER"
 ```
 
@@ -1007,7 +1009,8 @@ grep -n 'ubuntu-base-24' mk-base-ubuntu.sh
 
 期望四行全部指向 24.04：
 
-```startLine:45:49:LubanCat_SDK/ubuntu24.04/mk-base-ubuntu.sh
+```bash
+# LubanCat_SDK/ubuntu24.04/mk-base-ubuntu.sh 第 45~49 行
     if [ ! -e ubuntu-base-24.04.5-base-$ARCH.tar.gz ]; then
         echo "\033[36m wget ubuntu-base-24.04.5-base-"$ARCH".tar.gz \033[0m"
         wget -c http://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.5-base-$ARCH.tar.gz
@@ -1962,7 +1965,7 @@ sudo dd if=$FW/update.img of=/dev/sdX bs=4M conv=fsync status=progress
 | 12 | `menuconfig` 报 `Unable to find the ncurses libraries`，但 `libncurses-dev` 明明已装 | GCC 15 默认 C23，`check-lxdialog.sh` 里 `main() {}` 无返回类型成为**错误**；脚本把任何编译失败都误报成缺 ncurses | `HOST_EXTRACFLAGS="-Wno-implicit-int" ./build.sh menuconfig`（见 3.3） |
 | 13 | rootfs 阶段刷出大量 `rm: cannot remove 'binary/sys/...': Operation not permitted`，随后 `build_ubuntu failed` | `binary/` 里残留了 `proc`/`sys`/`dev` 挂载（上次中断没卸载），`rm -rf` 删不掉内核映射 | `sudo umount -l binary/proc binary/sys binary/dev` 后重跑（见 8.5） |
 | 14 | rootfs 打包时仅 4 行 `tar: binary/proc/... Cannot open: Permission denied`，脚本却"成功"了 | 同 13 的根因：`ch-mount.sh -u` 的 `sudo umount` 因密码超时失败，脚本不检查返回值就 `tar`，把宿主机 `/proc` 打进包 | 先 `sudo -v` 再编译；已中招则杀掉 tar、卸载、删废包（见 8.6） |
-| 15 | 烧录成功、系统能进桌面，但界面全是英文 | SDK 的 `mk-ubuntu-rootfs.sh` 只有 `export LC_ALL=C.UTF-8`，从未装 `language-pack-zh-hans` / `fonts-noto-cjk`，也没跑过 `locale-gen` | 板子上装语言包 + 字体后 `update-locale`，或改脚本重编（见 FAQ Q12） |
+| 15 | 烧录成功、系统能进桌面，但界面全是英文 | 三层叠加：① `mk-base-ubuntu.sh` 中文化只在 `xfce-full` 分支；② `ubuntu-base` 自带 `dpkg.cfg.d/excludes` 里 `path-exclude=/usr/share/locale/*/LC_MESSAGES/*.mo`，把所有翻译在安装时丢弃；③ 无 `/etc/default/locale` | 先解除 excludes，再把 `xfce` 加进中文化条件，删 `ubuntu-base-*.tar.gz` 和 `rootfs.img` 后重编（见 FAQ Q12） |
 | 15 | `Your display is too small to run Menuconfig!`，`It must be at least 19 lines by 80 columns.` | ncurses 硬性尺寸检查（`dialog.h`: `WINDOW_HEIGTH_MIN 19` / `WINDOW_WIDTH_MIN 80`），Cursor 内置终端面板高度不足时必现。配置本身不受影响，`menuconfig` 在进界面前就退出了 | 把终端面板拉高，或用独立 SSH 终端；也可以跳过 menuconfig，直接 `grep` 复核 `output/.config`（见 7.4） |
 
 ---
@@ -2081,127 +2084,302 @@ ls /tmp/chk/lib/modules/
 sudo umount /tmp/chk
 ```
 
-**Q12：桌面全是英文，怎么换成中文？**
+**Q12：桌面全是英文，怎么把中文编译进镜像？**
 
-**这不是你操作错了，是 SDK 本身就没做中文适配。** `mk-ubuntu-rootfs.sh` 里
-关于语言只有一行：
+#### 先搞清楚：为什么装了语言包还是英文
 
-```startLine:204:204:mk-ubuntu-rootfs.sh
-export LC_ALL=C.UTF-8
+很多人第一反应是"SDK 没装 `language-pack-zh-hans`"，**这个判断是错的**。
+SDK 里其实有完整的中文化代码，在 `mk-base-ubuntu.sh` 第 101~130 行，
+但它被锁在 `xfce-full` 条件里，而你用的是 `xfce`：
+
+```bash
+# ubuntu24.04/mk-base-ubuntu.sh 第 100~131 行（原有的中文化代码）
+if [[ "$TARGET" == "gnome-full" ||  "$TARGET" == "xfce-full" ]]; then
+    apt purge ibus firefox -y
+
+    echo -e "\033[47;36m Install Chinese fonts.................... \033[0m"
+    \${APT_INSTALL} language-pack-zh-hans fonts-noto-cjk-extra gnome-user-docs-zh-hans language-pack-gnome-zh-hans
+
+    # set default xinput for fcitx
+    \${APT_INSTALL} fcitx fcitx-table fcitx-googlepinyin fcitx-pinyin fcitx-config-gtk
+    sed -i 's/default/fcitx/g' /etc/X11/xinit/xinputrc
+
+    \${APT_INSTALL} ipython3 jupyter
+fi
+
+if [[ "$TARGET" == "gnome-full" ||  "$TARGET" == "xfce-full" ]]; then
+    # Uncomment zh_CN.UTF-8 for inclusion in generation
+    sed -i 's/^# *\(zh_CN.UTF-8\)/\1/' /etc/locale.gen
+    echo "LANG=zh_CN.UTF-8" >> /etc/default/locale
+
+    # Generate locale
+    locale-gen zh_CN.UTF-8
+
+    # Export env vars
+    echo "LC_ALL=zh_CN.UTF-8" >> /etc/environment    
+    echo "LANG=zh_CN.UTF-8" >> /etc/environment
+    echo "LANGUAGE=zh_CN:zh:en_US:en" >> /etc/environment
+
+    echo "export LC_ALL=zh_CN.UTF-8" >> /etc/profile.d/zh_CN.sh
+    echo "export LANG=zh_CN.UTF-8" >> /etc/profile.d/zh_CN.sh
+    echo "export LANGUAGE=zh_CN:zh:en_US:en" >> /etc/profile.d/zh_CN.sh
+
+    \${APT_INSTALL} $(check-language-support)
+fi
 ```
 
-`C.UTF-8` 是纯英文 locale，而整个脚本里以下东西一个都没装、没配：
+所以**光把上面这段从 `xfce-full` 放开到 `xfce` 也不够**，还有第二个坑，而且更隐蔽。
 
-| 缺失项 | 后果 |
+#### 真正的元凶：`dpkg.cfg.d/excludes` 把翻译全删了
+
+官方 `ubuntu-base-24.04.5-base-arm64.tar.gz` 里自带一个配置文件：
+
+```bash
+# ubuntu24.04/binary/etc/dpkg/dpkg.cfg.d/excludes（来自 ubuntu-base 官方包）
+# Drop all man pages
+path-exclude=/usr/share/man/*
+
+# Drop all translations
+path-exclude=/usr/share/locale/*/LC_MESSAGES/*.mo
+```
+
+这条 `path-exclude` 的作用是：**此后 dpkg 安装任何包，都直接丢弃**
+`/usr/share/locale/<lang>/LC_MESSAGES/*.mo` 这类文件——也就是所有软件的翻译。
+
+实测你这版镜像的 `binary/` 里：
+
+```bash
+$ find binary/usr/share/locale -name "*.mo" | wc -l
+45
+$ find binary/usr/share/locale/zh_CN/LC_MESSAGES -type f | wc -l
+0
+```
+
+整个 rootfs 只剩 45 个 `.mo`，且**全是 `coreutils` 的 `LC_TIME`**（日期格式，不是界面翻译）。
+`zh_CN/LC_MESSAGES/` 是**空目录**——目录建了，翻译文件被过滤掉了。
+
+而 Xfce 的翻译恰好就放在被排除的路径下。以 Thunar 为例：
+
+```bash
+$ dpkg -c thunar-data_*.deb | grep zh_CN
+./usr/share/locale/zh_CN/LC_MESSAGES/thunar.mo    # ← 被 path-exclude 吃掉
+```
+
+**所以 `language-pack-zh-hans` 根本救不了 Xfce**——它只提供
+`/usr/share/locale-langpack/zh_CN/LC_MESSAGES/` 下的 214 个系统工具翻译
+（apt、bash、PAM、NetworkManager 等），**不含 thunar / xfce4-session / xfwm4 / xfdesktop**。
+Xfce 的中文来自各应用包自己的 `-data` 子包，全部落在被排除的路径上。
+
+#### 三层原因汇总
+
+| 层 | 问题 | 后果 |
+| --- | --- | --- |
+| 1 | `mk-base-ubuntu.sh` 中文化只在 `xfce-full` 分支 | `xfce` 目标完全不装语言包 |
+| 2 | `etc/dpkg/dpkg.cfg.d/excludes` 的 `path-exclude` | 即使装了，所有 `.mo` 翻译被丢弃 |
+| 3 | 无 `/etc/default/locale` 的 `LANG=zh_CN.UTF-8` | `locale-gen` 即使跑了也不生效 |
+
+只修第 1 层 → 界面仍是英文（因为第 2 层把文件删了）。
+必须**先解第 2 层**，再补第 1、3 层。
+
+---
+
+### 方案：改两个文件，重新编译镜像
+
+> **重要**：`./build.sh ubuntu` 一旦发现 `ubuntu-base-*.tar.gz` 和
+> `ubuntu-rk356x-xfce-rootfs.img` 存在就会**跳过整个 rootfs 构建**（见 FAQ Q10）。
+> 所以改完脚本必须**先删产物**，否则改了也不生效。
+
+#### 第 1 步：解除翻译排除（关键，别漏）
+
+编辑 `~/LubanCat_SDK/ubuntu24.04/mk-base-ubuntu.sh`，在 chroot 段
+`apt-get -y update` **之前**插入：
+
+```bash
+# 解除 dpkg 对翻译文件的排除（ubuntu-base 自带的 excludes 会丢弃所有 .mo）
+sed -i 's|^path-exclude=/usr/share/locale/\*/LC_MESSAGES/\*.mo|# &|' \
+    /etc/dpkg/dpkg.cfg.d/excludes
+```
+
+这行把那条规则注释掉，注意 `sed` 里的 `*` 必须转义成 `\*`（正则里 `*` 是量词）。
+
+一行脚本直接改（在宿主机上执行，不用手动开编辑器）：
+
+```bash
+cd ~/LubanCat_SDK/ubuntu24.04
+python3 - <<'EOF'
+p = "mk-base-ubuntu.sh"
+s = open(p, encoding="utf-8").read()
+anchor = "apt-get -y update\n"
+inject = ("# 解除 dpkg 对翻译文件的排除\n"
+          "sed -i 's|^path-exclude=/usr/share/locale/\\*/LC_MESSAGES/\\*.mo|# &|' "
+          "/etc/dpkg/dpkg.cfg.d/excludes\n\n")
+assert s.count(anchor) == 1, f"锚点出现 {s.count(anchor)} 次"
+s = s.replace(anchor, inject + anchor)
+open(p, "w", encoding="utf-8").write(s)
+print("已插入 excludes 解除逻辑")
+EOF
+```
+
+#### 第 2 步：把中文化块从 `xfce-full` 放开到 `xfce`
+
+`mk-base-ubuntu.sh` 里有两处 `if [[ "$TARGET" == "gnome-full" ||  "$TARGET" == "xfce-full" ]]`，
+需要把 `xfce` 加进去。**同时 SDK 原代码用的是 fcitx4，24.04 上已被上游废弃**
+（2025 年 Ubuntu 开发者已宣布 fcitx4 dead，Noble 里虽仍存但不再维护），所以一并换成 fcitx5。
+
+这一段还顺手修掉了 SDK 里的三个**会导致构建直接失败**的问题：
+
+| 问题 | 后果 |
 | --- | --- |
-| `language-pack-zh-hans` | 没有中文翻译文件，界面全英文 |
-| `fonts-noto-cjk` | 没有中文字体，即便有翻译也会显示成方块（豆腐块）|
-| `locale-gen zh_CN.UTF-8` | 系统里根本不存在这个 locale |
-| `/etc/default/locale` | 没有任何默认语言设置 |
-| `fcitx5` / `ibus` | 无法输入中文（这个和界面语言是两件事）|
-
-所以**烧录后的桌面必然是英文的**，跟 24.04 / 22.04 无关，两个版本都一样。
-
-#### 方案一：在板子上直接装（推荐，约 10 分钟）
-
-不重新编译镜像，SSH 登录板子后执行：
+| `apt purge ibus firefox` 未加容错 | `xfce` 目标下 firefox 本就没装，`bash -e` 下返回 100，**构建立刻终止** |
+| `$(check-language-support)` 在宿主机展开 | chroot 外层执行，宿主机无此工具 → 展开为空，**等于没装语言包** |
+| `/etc/environment` 写入 `LC_ALL=zh_CN.UTF-8` | 被所有进程继承，未适配程序会 fallback 成乱码 |
 
 ```bash
-# 1. 更新软件源（SDK 打包时删了 /var/lib/apt/lists，首次会慢一些）
-sudo apt update
+cd ~/LubanCat_SDK/ubuntu24.04
+cp mk-base-ubuntu.sh /tmp/mk-base-ubuntu.sh.bak   # 先备份
 
-# 2. 中文语言包 + 中文字体（重要：没有字体中文会变方块）
-sudo apt install -y language-pack-zh-hans language-pack-zh-hans-base \
-                    fonts-noto-cjk fonts-noto-cjk-extra
+python3 - <<'EOF'
+p = "mk-base-ubuntu.sh"
+s = open(p, encoding="utf-8").read()
 
-# 3. 生成中文 locale
-sudo locale-gen zh_CN.UTF-8
+# 1) 两个中文化 if 条件都加上 xfce
+old_cond = 'if [[ "$TARGET" == "gnome-full" ||  "$TARGET" == "xfce-full" ]]; then'
+new_cond = 'if [[ "$TARGET" == "xfce" || "$TARGET" == "gnome-full" || "$TARGET" == "xfce-full" ]]; then'
+assert s.count(old_cond) == 2, f"期望 2 处，实际 {s.count(old_cond)} 处"
+s = s.replace(old_cond, new_cond)
 
-# 4. 设为系统默认语言
-sudo update-locale LANG=zh_CN.UTF-8 LANGUAGE=zh_CN:zh
+# 2) apt purge 容错（bash -e 下 purge 不存在的包会终止整个构建）
+old_purge = "    apt purge ibus firefox -y\n"
+assert s.count(old_purge) == 1
+s = s.replace(old_purge,
+    "    # 注意：bash -e 下 purge 不存在的包会返回 100 并终止构建，必须容错\n"
+    "    apt purge -y ibus firefox || true\n")
 
-# 5. 确认生效
-locale -a | grep zh_CN
-cat /etc/default/locale
+# 3) fcitx4 → fcitx5
+old_fcitx = r"\${APT_INSTALL} fcitx fcitx-table fcitx-googlepinyin fcitx-pinyin fcitx-config-gtk"
+assert s.count(old_fcitx) == 1
+s = s.replace(old_fcitx,
+    r"\${APT_INSTALL} fcitx5 fcitx5-chinese-addons fcitx5-frontend-gtk3 "
+    r"fcitx5-frontend-qt5 fcitx5-config-qt")
+s = s.replace("sed -i 's/default/fcitx/g' /etc/X11/xinit/xinputrc",
+              "im-config -n fcitx5")
+
+# 4) $(check-language-support) 在宿主机展开恒为空，改成显式包名
+old_cls = r"\${APT_INSTALL} $(check-language-support)"
+assert s.count(old_cls) == 1
+s = s.replace(old_cls,
+    r"\${APT_INSTALL} fonts-wqy-microhei fonts-wqy-zenhei" + "\n"
+    r"    \${APT_INSTALL} language-pack-zh-hans-base")
+
+# 5) 去掉 /etc/environment 里的 LC_ALL（反模式）
+s = s.replace('    echo "LC_ALL=zh_CN.UTF-8" >> /etc/environment    \n', "")
+
+open(p, "w", encoding="utf-8").write(s)
+print("✅ 已改造中文化块（xfce + fcitx5）")
+EOF
+
+bash -n mk-base-ubuntu.sh && echo "✅ 语法检查通过"
 ```
 
-**然后注销重新登录**（或 `sudo reboot`），桌面即为中文。
-
-如果重启后仍是英文，说明 Xfce 会话没读到系统 locale，手动设一次：
-
-> **Applications → Settings → Language Support** → Language 选「汉语（中国）」→ Log Out
-
-#### 方案二：需要打中文（输入法）
-
-界面中文化只是显示，**要输入中文必须另装输入法**：
+#### 第 3 步：改完先自检
 
 ```bash
-sudo apt install -y fcitx5 fcitx5-chinese-addons \
-                    fcitx5-frontend-gtk3 fcitx5-frontend-qt5
+cd ~/LubanCat_SDK/ubuntu24.04
 
-# 设为默认输入法框架
-im-config -n fcitx5
+echo "=== 1. excludes 解除逻辑已插入（应有 1 行）==="
+grep -n "LC_MESSAGES" mk-base-ubuntu.sh
+# 期望：sed -i 's|^path-exclude=/usr/share/locale/\*/LC_MESSAGES/\*.mo|# &|'
+
+echo "=== 2. 中文化条件含 xfce（应为 2 行含 gnome-full 的长条件）==="
+grep -n 'gnome-full' mk-base-ubuntu.sh
+
+echo "=== 3. fcitx5 已替换（不应再出现 fcitx-table / fcitx-googlepinyin）==="
+grep -n 'fcitx' mk-base-ubuntu.sh
+
+echo "=== 4. purge 已加容错（应带 || true）==="
+grep -n 'apt purge' mk-base-ubuntu.sh
 ```
 
-注销重登后，系统托盘会出现 fcitx5 图标，`Ctrl+Space` 切换中英文。
+四项都对上再往下走。**特别注意第 4 项**：如果 `apt purge ibus firefox -y`
+后面没有 `|| true`，你的构建会在第 5 分钟直接退出，白等一小时。
 
-> 如果托盘没有出现，检查是否装了 Xfce 的面板插件：
-> `sudo apt install fcitx5-frontend-gtk3` 后重新登录；
-> 或手动启动一次 `fcitx5 -d`。
-
-#### 方案三：改进 SDK，重新编译带中文的镜像
-
-如果想把中文做进镜像（方便分享给别人），改 `ubuntu24.04/mk-ubuntu-rootfs.sh`，
-在 chroot 段的 `apt-get update` 之后插入：
+#### 第 4 步：删产物 + 重新编译
 
 ```bash
-# 中文化（加在 ${APT_INSTALL} 变量定义之后、desktop 安装之前）
-${APT_INSTALL} language-pack-zh-hans language-pack-zh-hans-base \
-               fonts-noto-cjk fonts-noto-cjk-extra fcitx5 fcitx5-chinese-addons
+cd ~/LubanCat_SDK
 
-# 生成并设为默认
-locale-gen zh_CN.UTF-8
-update-locale LANG=zh_CN.UTF-8 LANGUAGE=zh_CN:zh
-```
-
-注意脚本里 `export LC_ALL=C.UTF-8` 那行**不要删**——它是构建期用的，
-保证 apt 输出不出现乱码。真正影响用户桌面的是 `update-locale` 写进
-`/etc/default/locale` 的值。
-
-改完重新编译 rootfs（60~90 分钟）：
-
-```bash
+# 必须删：否则 build.sh 直接跳过，改了等于没改
 rm -f ubuntu24.04/ubuntu-rk356x-xfce-rootfs.img
+# 强烈建议连基础包一起删：mk-base-ubuntu.sh 的改动才会生效
+rm -f ubuntu24.04/ubuntu-base-xfce-arm64-*.tar.gz
+
+# 重新编译（60~90 分钟，用 tmux 跑，避免 SSH 断开）
+tmux new -s build
+sudo -v                      # 提前喂 sudo，见 8.3 / 8.6
 ./build.sh ubuntu
 ./build.sh firmware
 ```
 
-#### 空间占用参考
+> **为什么必须删 `ubuntu-base-xfce-arm64-*.tar.gz`**：
+> `mk-rootfs.sh` 里是 `if [ ! -f ubuntu-base-$...tar.gz ]; then ./mk-base-ubuntu.sh; fi`。
+> 这个 tar 包一旦存在，`mk-base-ubuntu.sh` **永远不会再跑**，
+> 而你要改的中文化逻辑全在它里面。只删 `rootfs.img` 会白编一小时。
 
-| 包 | 大小 |
-| --- | --- |
-| `language-pack-zh-hans(-base)` | 约 30 MB |
-| `fonts-noto-cjk(-extra)` | 约 100 MB |
-| `fcitx5` 全家桶 | 约 50 MB |
-| **合计** | **约 200 MB** |
-
-装之前先看剩余空间，`/` 使用率超过 85% 的话建议先清理：
+#### 第 5 步：验证编译结果（编译完就能查，不用等烧录）
 
 ```bash
-df -h /
+cd ~/LubanCat_SDK/ubuntu24.04
+
+echo "=== 1. 中文翻译是否进镜像 ==="
+find binary/usr/share/locale/zh_CN/LC_MESSAGES -name "*.mo" | wc -l
+# 期望：几百个（之前是 0）
+ls binary/usr/share/locale/zh_CN/LC_MESSAGES/thunar.mo && echo "✅ Thunar 有中文"
+
+echo "=== 2. locale 是否生成 ==="
+ls binary/usr/lib/locale/zh_CN.utf8 && echo "✅ locale 已生成"
+cat binary/etc/default/locale
+
+echo "=== 3. 输入法 ==="
+ls binary/usr/bin/fcitx5 && echo "✅ fcitx5 已装"
+grep -v "^#" binary/etc/X11/xinit/xinputrc | grep -v "^$"
+# 期望：run_im fcitx5
 ```
+
+三项全部通过再烧录，否则就是白烧。
+
+#### 空间影响
+
+| 项 | 增量 |
+| --- | --- |
+| 翻译文件（`*.mo`，解除排除后） | 约 +120 MB |
+| `fonts-noto-cjk-extra` | 约 +100 MB |
+| `fcitx5` 全家桶 | 约 +50 MB |
+| **合计** | **约 +270 MB** |
+
+先算一下空间够不够。分区表里 rootfs 是 `0x00c00000` 扇区：
+
+```bash
+python3 -c "s=0x00c00000; print('分区容量: %.2f GB' % (s*512/1024**3))"
+# 分区容量: 6.00 GB
+```
+
+当前镜像 4.06 GB，余量约 **1.9 GB**，加 270 MB 完全够用，不会触发
+`rootfs.img's size exceed parameter's system partition size limit`。
+
+> 如果以后还要加东西导致超限，按 FAQ Q2 用 `./build.sh mod-parts` 调整分区。
 
 #### 常见问题
 
-- **中文显示成方块** → 只装了语言包没装字体，补 `fonts-noto-cjk`
-- **`locale-gen` 报 `zh_CN.UTF-8` 不存在** → 先装 `language-pack-zh-hans`，
-  它会带上 `/usr/share/i18n/locales/zh_CN`
-- **`apt update` 很慢** → SDK 打包时删了包索引，首次需要完整拉一遍，
-  之后正常。可以换更快的中科大盘：
-  `sudo sed -i 's/mirrors.aliyun.com/mirrors.ustc.edu.cn/g' /etc/apt/sources.list`
-- **输入法装了但打不出中文** → `im-config -n fcitx5` 后必须注销重登，
-  `im-config` 的设置在登录时生效
-
+- **编译完 `zh_CN/LC_MESSAGES` 还是 0 个 `.mo`**
+  → `excludes` 没解除成功。确认 `sed` 那行的 `\*` 转义没写错，
+  且插在 `apt-get -y update` **之前**（update 之后就晚了，包已经装完）
+- **`im-config -n fcitx5` 报 command not found**
+  → `im-config` 由 `xubuntu-core` 依赖带入，正常都在。若真没有，`apt install im-config`
+- **界面中文但日期/数字格式怪**
+  → `LC_ALL` 别设成 `zh_CN.UTF-8`，只设 `LANG` 和 `LANGUAGE` 即可。
+  SDK 原代码往 `/etc/environment` 写了 `LC_ALL=zh_CN.UTF-8`，如遇问题可删掉那行
+- **输入法装了但 Ctrl+Space 无反应**
+  → `xinputrc` 里必须是 `run_im fcitx5`（不是 `fcitx`）。注销重登生效
 ---
 
 ## 十四、参考资料
