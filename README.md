@@ -80,19 +80,6 @@ df -h ~                          # 看剩余空间，至少 60G
 findmnt -no FSTYPE -T ~          # 看文件系统类型，必须是 ext4
 ```
 
-期望输出类似（第一段是 `df` 的表，第二段是 `findmnt` 的结果）：
-
-```
-文件系统        大小  已用  可用 已用% 挂载点
-/dev/nvme0n1p3  929G   69G  813G    8% /
-
-ext4
-```
-
-若不是 ext4（显示 `ntfs`、`exfat`、`vfat`、`cifs` 等），SDK 会报
-`Please move SDK source code into an ext4 partition`——脚本里大量 `chown`、`chmod`、
-符号链接操作，FAT 类文件系统不支持这些。
-
 ### 1.2 安装依赖
 
 一行装齐（已适配 Ubuntu 26.04 的包名变更）：
@@ -143,7 +130,7 @@ ls /proc/sys/fs/binfmt_misc/ | grep qemu-aarch64
 
 无输出时：`sudo systemctl restart systemd-binfmt`。
 
-### 2.2 处理 `python` 与 `python2`（两个不同的东西）
+### 2.2 处理 `python` 与 `python2`
 
 SDK 在**两个不同阶段**分别检查这两个命令，必须分开解决：
 
@@ -152,16 +139,14 @@ SDK 在**两个不同阶段**分别检查这两个命令，必须分开解决：
 | `python` | `check-kernel.sh`（内核） | `apt install python-is-python3` |
 | `python2` | `check-loader.sh`（u-boot） | 建 shim 转发到 python3 |
 
-`python-is-python3` **不会**创建 `python2`，所以两个都要做。
-
-**第一步：解决 `python`**
+**第一步：解决** `python`
 
 ```bash
 sudo apt install -y python-is-python3
 python -V      # Python 3.x
 ```
 
-**第二步：解决 `python2`**
+**第二步：解决** `python2`
 
 `check-loader.sh` 全文只做一件事——判断 `which python2` 是否成功，**不检查版本**：
 
@@ -202,45 +187,21 @@ which python2   # 非空
 
 不推荐装真正的 Python 2：要从源码编译几分钟、2020 年已 EOL、装进 `/usr/local/bin` 容易污染环境。
 
-### 2.3 GCC 15 下修复 `menuconfig`
-
-在 GCC 15 的宿主机上跑 `./build.sh menuconfig` 会报：
-
-```
- *** Unable to find the ncurses libraries or the
- *** required header files.
- *** 'make menuconfig' requires the ncurses libraries.
-```
-
-**这条报错是误导性的**，`libncurses-dev` 其实装着。真正原因是 `kconfig/lxdialog/check-lxdialog.sh` 用这段代码测试 ncurses 能否链接：
-
-```c
-#include CURSES_LOC
-main() {}
-```
-
-`main()` 没有返回类型，是 K&R 写法。GCC 14 及以前只是 `-Wimplicit-int` 警告，**GCC 15 把默认方言切到 C23 后变成错误**。脚本只要发现编译失败，就一律报「找不到 ncurses」。
-
-确认自己的 GCC：
-
-```bash
-gcc --version | head -1     # 15.x 会踩，13.x/14.x 不踩
-```
-
-修法（覆盖编译参数，不改 SDK 源码）：
+### 2.3 跑 `menuconfig`
 
 ```bash
 HOST_EXTRACFLAGS="-Wno-implicit-int" ./build.sh menuconfig
 ```
 
-也可以长期生效（只影响宿主机侧工具，不进入镜像）：
+想长期生效就写进 `~/.bashrc`（只影响宿主机侧编译工具，不会进镜像）：
 
 ```bash
 echo 'export HOST_EXTRACFLAGS="-Wno-implicit-int"' >> ~/.bashrc
 ```
 
-> ⚠️ 终端窗口**至少要 19 行 × 80 列**，否则 menuconfig 在进界面前就退出，报
-> `Your display is too small to run Menuconfig!`。这是 ncurses 的硬性检查，跟配置无关。
+> 这里前缀 `HOST_EXTRACFLAGS` 是为了绕开 GCC 15 的一个报错。若仍报
+> `Unable to find the ncurses libraries` 或 `Your display is too small to run Menuconfig!`，
+> 原因见 **9.2**。
 
 ---
 
@@ -334,7 +295,7 @@ cd ~/LubanCat_SDK
 
 ### 4.2 补齐 `ubuntu24.04` 目录
 
-**这是本文最关键的一步：官方 SDK 里没有 `ubuntu24.04/` 目录。** 先确认：
+**这是本文最关键的一步：官方 SDK 里没有** `ubuntu24.04/` **目录。** 先确认：
 
 ```bash
 ls -d ubuntu* debian*
@@ -357,12 +318,12 @@ rsync -a \
 du -sh ubuntu24.04        # 期望约 370 MB
 ```
 
-> **为什么不用 `cp -a`**：`binary/` 里全是 root 属主文件（`/etc/shadow`、`/etc/ssl/private` 等），
+> **为什么不用** `cp -a`：`binary/` 里全是 root 属主文件（`/etc/shadow`、`/etc/ssl/private` 等），
 > 普通用户 `cp` 会刷出几十行「权限不够」并以非零状态退出。`rsync --exclude` 从源头就不碰它们。
 
 ### 4.3 改造三处
 
-**① `sources.list` 换 noble**
+**①** `sources.list` **换 noble**
 
 ```bash
 cd ~/LubanCat_SDK/ubuntu24.04
@@ -370,7 +331,7 @@ sed -i 's/\bjammy\b/noble/g' sources.list
 grep -c noble sources.list        # 期望 8（4 条 deb + 4 条注释的 deb-src）
 ```
 
-**② `mk-base-ubuntu.sh` 改基础包版本号**
+**②** `mk-base-ubuntu.sh` **改基础包版本号**
 
 ```bash
 sed -i -e 's|ubuntu-base-22\.04\.5-base-|ubuntu-base-24.04.5-base-|g' \
@@ -378,7 +339,7 @@ sed -i -e 's|ubuntu-base-22\.04\.5-base-|ubuntu-base-24.04.5-base-|g' \
 grep -c 'ubuntu-base-24.04' mk-base-ubuntu.sh     # 期望 4
 ```
 
-> ⚠️ 两条替换**必须写成两个 `-e`**，不要用单引号内换行续写的写法。
+> ⚠️ 两条替换**必须写成两个** `-e`，不要用单引号内换行续写的写法。
 > 单引号里的 `\` + 换行会被 `sed` 当成正则的一部分，报
 > `sed: -e 表达式 #1: 未终止的地址正则表达式`。
 
@@ -397,7 +358,7 @@ for f in mk-base-ubuntu.sh mk-image.sh mk-ubuntu-rootfs.sh; do bash -n $f && ech
 
 ### 4.4 把 defconfig 切到 noble
 
-`FOCAL / JAMMY / NOBLE` 是 **choice 类型，同一时间只能有一个为 `y`**，所以必须先关掉其他两个：
+`FOCAL / JAMMY / NOBLE` 是 **choice 类型，同一时间只能有一个为** `y`，所以必须先关掉其他两个：
 
 ```bash
 cd ~/LubanCat_SDK
@@ -504,7 +465,7 @@ rootfs 慢的原因是：要在 chroot 里通过 apt 装上千个 deb（XFCE 桌
 
 ### 5.3 关于 sudo（必须看）
 
-**`sudo -v` 不是可选项。** `./build.sh ubuntu` 内部要执行 `sudo mount`、`sudo chroot`、`sudo mkfs.ext4`，而 `mk-base-ubuntu.sh` 结尾打包前会 `sudo umount`。如果那时密码提示超时，**卸载会静默失败**，接着 `tar` 就把宿主机的 `/proc` 打进包里，生成一个**看起来成功但完全不能用**的废包（详见 9.3）。
+`sudo -v` **不是可选项。** `./build.sh ubuntu` 内部要执行 `sudo mount`、`sudo chroot`、`sudo mkfs.ext4`，而 `mk-base-ubuntu.sh` 结尾打包前会 `sudo umount`。如果那时密码提示超时，**卸载会静默失败**，接着 `tar` 就把宿主机的 `/proc` 打进包里，生成一个**看起来成功但完全不能用**的废包（详见 9.3）。
 
 ```bash
 cd ~/LubanCat_SDK
@@ -710,7 +671,7 @@ sudo dd if=$FW/update.img of=/dev/sdX bs=4M conv=fsync status=progress
 
 ### 8.1 为什么默认是英文
 
-SDK 里的中文化代码存在，但**被锁在 `xfce-full` 条件里**，而默认用的是 `xfce`。更隐蔽的是第二层：官方 `ubuntu-base` 镜像自带一个 dpkg 配置，把所有翻译在安装时直接丢弃：
+SDK 里的中文化代码存在，但**被锁在** `xfce-full` **条件里**，而默认用的是 `xfce`。更隐蔽的是第二层：官方 `ubuntu-base` 镜像自带一个 dpkg 配置，把所有翻译在安装时直接丢弃：
 
 ```bash
 # ubuntu24.04/binary/etc/dpkg/dpkg.cfg.d/excludes（来自 ubuntu-base 官方包）
@@ -727,7 +688,7 @@ $ dpkg -c thunar-data_*.deb | grep zh_CN
 ./usr/share/locale/zh_CN/LC_MESSAGES/thunar.mo    # ← 被 path-exclude 吃掉
 ```
 
-所以 **`language-pack-zh-hans` 救不了 Xfce 界面**——它只提供 `/usr/share/locale-langpack/` 下的系统工具翻译（apt、bash、PAM），不含 thunar / xfce4-session / xfwm4 / xfdesktop。
+所以 `language-pack-zh-hans` **救不了 Xfce 界面**——它只提供 `/usr/share/locale-langpack/` 下的系统工具翻译（apt、bash、PAM），不含 thunar / xfce4-session / xfwm4 / xfdesktop。
 
 三层原因汇总：
 
@@ -919,6 +880,31 @@ cd ~/LubanCat_SDK && rm -rf .repo    # 清掉半成品
 | `sudo: A terminal is required to authenticate` | 无 TTY | 在真实终端跑，或临时开免密（见 5.3） |
 | `rsync`/`cp -a` 刷大量「权限不够」 | `binary/` 是 root 属主 | 用 `rsync --exclude binary`（见 4.2） |
 
+**`Unable to find the ncurses libraries` 展开说明（GCC 15 专属）**
+
+这条报错是**误导性的**，`libncurses-dev` 其实装着。真正原因是
+`kconfig/lxdialog/check-lxdialog.sh` 用这段代码测试 ncurses 能否链接：
+
+```c
+#include CURSES_LOC
+main() {}
+```
+
+`main()` 没有返回类型，是 K&R 写法。GCC 14 及以前只是 `-Wimplicit-int` 警告，
+**GCC 15 把默认方言切到 C23 后升级成错误**。脚本只要发现编译失败，就一律报「找不到 ncurses」，
+所以报错内容和根因完全对不上。
+
+先确认自己的 GCC 版本：
+
+```bash
+gcc --version | head -1     # 15.x 会踩，13.x/14.x 不踩
+```
+
+修法见 **2.3**：`HOST_EXTRACFLAGS="-Wno-implicit-int"` 覆盖编译参数，不改 SDK 源码。
+
+另外 `Your display is too small to run Menuconfig!` 跟配置无关，是 ncurses 的硬性检查：
+终端窗口**至少 19 行 × 80 列**，否则 menuconfig 进界面之前就退出。
+
 ### 9.3 两个同根因的致命问题：残留挂载
 
 两者根因相同（`umount` 没成功），只是暴露时机不同：
@@ -946,7 +932,7 @@ Run tar pack ubuntu-base-xfce-arm64-*.tar.gz
 tar: binary/proc/sys/vm/drop_caches: Cannot open: Permission denied
 ```
 
-只有 4 行，看起来像无关紧要的小问题，**实际上整台宿主机的 `/proc` 正在被打进包里**。
+只有 4 行，看起来像无关紧要的小问题，**实际上整台宿主机的** `/proc` **正在被打进包里**。
 
 **为什么会产生残留**：`ch-mount.sh` 挂的是三个内核虚拟文件系统（`proc`/`sys`/`dev`），卸载只挂在 `trap finish ERR` 上。只要中途失败、Ctrl-C、或终端断开，卸载就来不及执行。下次 `rm -rf binary` 就删不掉这些挂载点——它们是宿主机内核的映射，不是普通文件。
 
@@ -957,7 +943,7 @@ grep LubanCat_SDK /proc/mounts        # 有输出就是残留
 pgrep -af "tar zcf ubuntu-base"       # 中招时能看到 tar 还在跑
 ```
 
-**还可以查包里有没有 `proc/`**（正常应为 0，实测中招时是 2346）：
+**还可以查包里有没有** `proc/`（正常应为 0，实测中招时是 2346）：
 
 ```bash
 cd ~/LubanCat_SDK/ubuntu24.04
@@ -980,7 +966,7 @@ grep ubuntu24.04/binary /proc/mounts        # 应为空
 rm -f ~/LubanCat_SDK/ubuntu24.04/ubuntu-base-xfce-arm64-*.tar.gz
 ```
 
-清理后直接重跑，**不需要删除整个 `binary/` 目录**（误删了也不要紧，脚本会重新解压 base 包重建，只是多花几分钟）。
+清理后直接重跑，**不需要删除整个** `binary/` **目录**（误删了也不要紧，脚本会重新解压 base 包重建，只是多花几分钟）。
 
 `umount` 报 `target is busy` 时先 `-l`（懒卸载），还不行加 `-f`，仍残留用 `-l -R` 递归。
 
@@ -988,13 +974,13 @@ rm -f ~/LubanCat_SDK/ubuntu24.04/ubuntu-base-xfce-arm64-*.tar.gz
 
 ### 9.4 烧录与启动阶段
 
-| 现象 | 原因 | 解法 |
-| --- | --- | --- |
-| `rkdeveloptool` 报 `command is invalid!` | 该分支没有烧整包命令 | 改用 `upgrade_tool UF`（见 6.3） |
-| 烧写"1 秒就成功" | `ul` 只是写 loader | 同上 |
-| `du -sh output/firmware/*` 全是 0 | 全是软链，`du` 不跟随 | 加 `-L`（见 6.1） |
-| 上电卡在 `(initramfs)`，报 `unsupported feature(s): FEATURE_C12` | 目标系统 `e2fsck` 不认识 `orphan_file` | 见 5.4。**已进 initramfs 后 `fsck.ext4 -y` 救不了**，只能修镜像重烧 |
-| 桌面黑屏只有鼠标指针 | 多为 Mali 库与内核版本不匹配 | ① 先用 lite 版验证基础显示；② 确认 `/lib/modules/` 目录名与内核版本一致；③ 检查 GPU 驱动与 `libmali` 版本 |
+| 现象                                                         | 原因                              | 解法                                                                          |
+| ---------------------------------------------------------- | ------------------------------- | --------------------------------------------------------------------------- |
+| `rkdeveloptool` 报 `command is invalid!`                    | 该分支没有烧整包命令                      | 改用 `upgrade_tool UF`（见 6.3）                                                 |
+| 烧写"1 秒就成功"                                                 | `ul` 只是写 loader                 | 同上                                                                          |
+| `du -sh output/firmware/*` 全是 0                            | 全是软链，`du` 不跟随                   | 加 `-L`（见 6.1）                                                               |
+| 上电卡在 `(initramfs)`，报 `unsupported feature(s): FEATURE_C12` | 目标系统 `e2fsck` 不认识 `orphan_file` | 见 5.4。**已进 initramfs 后** `fsck.ext4 -y` **救不了**，只能修镜像重烧                     |
+| 桌面黑屏只有鼠标指针                                                 | 多为 Mali 库与内核版本不匹配               | ① 先用 lite 版验证基础显示；② 确认 `/lib/modules/` 目录名与内核版本一致；③ 检查 GPU 驱动与 `libmali` 版本 |
 
 ### 9.5 常见操作问答
 
@@ -1075,7 +1061,7 @@ DO_BUILD=0   ./scripts/03-build-ubuntu24.sh   # 只改配置不编译，用于�
 
 脚本内置了本文所有坑的规避：qemu 软链、python2 shim、目录自动补齐、强制清 `.config` 缓存、`orphan_file` 检测、残留挂载清理。
 
-**脚本只做到生成 `update.img` 为止**，烧录、首次登录验证仍需手动（需要硬件交互）。
+**脚本只做到生成** `update.img` **为止**，烧录、首次登录验证仍需手动（需要硬件交互）。
 
 > 脚本是可选工具，**本文始终是唯一权威依据**。手动执行反而更容易排查问题，因为能看到每一步的完整输出。
 
