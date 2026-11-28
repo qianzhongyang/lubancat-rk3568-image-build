@@ -535,6 +535,15 @@ assert s.count(anchor) == 1
 s = s.replace(anchor, inject + anchor)
 
 # 2) 两处中文化条件都加上 xfce
+#    原版这几步本来就在脚本里，只是被 xfce-full 条件挡住，放开后自动生效：
+#      sed -i 's/^# *\(zh_CN.UTF-8\)/\1/' /etc/locale.gen   # 启用 locale 模板
+#      echo "LANG=zh_CN.UTF-8" >> /etc/default/locale
+#      locale-gen zh_CN.UTF-8                                # 真正生成 locale
+#      echo "LANG=zh_CN.UTF-8" >> /etc/environment
+#      echo "export LANG/LANGUAGE=..." >> /etc/profile.d/zh_CN.sh
+#    locale-gen 是必须的：没有它 /usr/lib/locale/zh_CN.utf8 不存在，
+#    翻译文件再全程序也会 fallback 回英文。
+#    （以上均在 chroot 内执行，不要在宿主机终端直接跑）
 old_cond = 'if [[ "$TARGET" == "gnome-full" ||  "$TARGET" == "xfce-full" ]]; then'
 new_cond = 'if [[ "$TARGET" == "xfce" || "$TARGET" == "gnome-full" || "$TARGET" == "xfce-full" ]]; then'
 assert s.count(old_cond) == 2
@@ -584,19 +593,7 @@ bash -n mk-base-ubuntu.sh && echo "✅ 语法通过"
 > 全部可装，SDK 原来的 fcitx4 写法在 24.04 上**能正常构建**。想省事就把第 4 步整段删掉，
 > 其余五步照做即可。
 
-解开 `xfce` 条件后，SDK 原有的这几步也会跟着生效，不需要额外手写（**同样是在 chroot 内执行的，不是宿主机命令**）：
-
-```bash
-sed -i 's/^# *\(zh_CN.UTF-8\)/\1/' /etc/locale.gen   # 启用 locale 模板
-echo "LANG=zh_CN.UTF-8" >> /etc/default/locale
-locale-gen zh_CN.UTF-8                                 # 真正生成 locale
-echo "LANG=zh_CN.UTF-8" >> /etc/environment
-echo "export LANG=... / LANGUAGE=..." >> /etc/profile.d/zh_CN.sh
-```
-
-其中 `locale-gen` 是界面中文化的必要条件——没有它 `/usr/lib/locale/zh_CN.utf8` 不存在，即使翻译文件齐全，程序也会 fallback 回英文。
-
-### 5.3 删产物重新编译(还未编译可跳过)
+### 5.3 删产物重新编译(首次编译可跳过)
 
 ```bash
 cd ~/LubanCat_SDK
@@ -608,7 +605,7 @@ sudo -v
 ./build.sh firmware
 ```
 
-### 5.4 编完先验证再烧录(还未编译可跳过)
+### 5.4 编完先验证再烧录(首次编译可跳过)
 
 ```bash
 cd ~/LubanCat_SDK/ubuntu24.04
@@ -645,10 +642,17 @@ export PATH=$HOME/bin:$PATH      # 让 python2 shim 生效
 ./build.sh loader                # u-boot + trust + MiniLoaderAll.bin
 ./build.sh kernel                # 6.1 内核 + dtb + extboot.img
 
-sudo -v                          # 关键：提前认证，见 6.3
-./build.sh ubuntu                # rootfs（需要 sudo）
+# 关键：提前认证，见 6.3
+echo "$USER ALL=(ALL) NOPASSWD: ALL" | sudo tee /etc/sudoers.d/99-build >/dev/null
+sudo chmod 0440 /etc/sudoers.d/99-build
+sudo visudo -c
+# 编译 rootfs
+./build.sh ubuntu
+# 编译完撤销权限
+sudo rm -f /etc/sudoers.d/99-build
 
-./build.sh firmware              # 打包 update.img
+# 打包 update.img
+./build.sh firmware
 ```
 
 ### 6.2 耗时参考
@@ -664,7 +668,7 @@ sudo -v                          # 关键：提前认证，见 6.3
 
 rootfs 慢的原因是：要在 chroot 里通过 apt 装上千个 deb（XFCE 桌面全套），且全程用 qemu 模拟 arm64，CPU 开销极大。
 
-### 6.3 关于 sudo（必须看）
+### 6.3 关于 sudo
 
 `sudo -v` **不是可选项。** `./build.sh ubuntu` 内部要执行 `sudo mount`、`sudo chroot`、`sudo mkfs.ext4`，而 `mk-base-ubuntu.sh` 结尾打包前会 `sudo umount`。如果那时密码提示超时，**卸载会静默失败**，接着 `tar` 就把宿主机的 `/proc` 打进包里，生成一个**看起来成功但完全不能用**的废包（详见 9.3）。
 
@@ -723,7 +727,7 @@ grep -n "MKFS_OPTS" ubuntu24.04/mk-image.sh    # 确认已插入
 bash -n ubuntu24.04/mk-image.sh                # 确认语法
 ```
 
-### 6.5 只想重做 rootfs
+### 6.5 只想重做 rootfs(首次编译可跳过)
 
 脚本靠文件是否存在决定是否跳过。改过 `mk-base-ubuntu.sh` 时**两个都要删**：
 
@@ -861,17 +865,17 @@ sudo dd if=$FW/update.img of=/dev/sdX bs=4M conv=fsync status=progress
 
 ### 9.1 拉取 SDK 阶段
 
-| 报错                                                  | 原因                               | 解法                                                                                                                                                      |
-| --------------------------------------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GitCommandError: 'var GIT_COMMITTER_IDENT' failed` | git 全局身份未配置                      | 见 3.1                                                                                                                                                   |
-| `GnuTLS recv error (-110)`                          | GitHub 的 git 通道被 RST             | 见下方调优                                                                                                                                                   |
-| `Cannot get .../git-repo/clone.bundle`              | 缺 `--repo-url`                   | 加上镜像地址（见 3.2）                                                                                                                                           |
-| 中科大镜像拉 repo 本体 404                                  | 该路径下已无内容（实测 `404`）                | `--repo-url` 换清华 `https://mirrors.tuna.tsinghua.edu.cn/git/git-repo`（实测 200）。**别直接写** `gerrit.googlesource.com`**，国内多数网络 443 不通** |
-| `-u` 指向 github 时卡住                                  | `github.com` 直连抖动（实测偶发 20 s 无响应） | 换网络/代理后重试；不要在 `-u` 上加 gh-proxy 前缀（见 3.2「关于 github 中转」）                                                                    |
-| `repo sync` 拉子仓库极慢或中断                               | 13 个子仓库直连 `github.com`，链路抖动       | 直接重跑（断点续传）；调小 `-j` 减少并发；**不要**配 `insteadOf` 中转（实测 git 协议走中转常 0 MB），见 3.2 |
-| `Cannot initialize work tree` / `不是 Git 仓库：'.repo/projects/xxx.git'` | `.repo/project-objects/` 里留了空壳目录（只有 `objects/`，没有 `config`/`HEAD`），git 不认、repo 又不重建 | 两处目录一起删再 sync，详见 3.2「已经下坏了怎么办」 |
-| `Repo command failed: UpdateManifestError`          | 清单半成品损坏                          | `rm -rf ~/LubanCat_SDK/.repo/manifests*` 后重跑 init                                                                                                       |
-| `Current user is not the owner of SDK source`       | 之前用 root 跑过                      | `sudo chown -h -R $USER:$USER ~/LubanCat_SDK`                                                                                                           |
+| 报错                                                                   | 原因                                                                                  | 解法                                                                         |
+| -------------------------------------------------------------------- | ----------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `GitCommandError: 'var GIT_COMMITTER_IDENT' failed`                  | git 全局身份未配置                                                                         | 见 3.1                                                                      |
+| `GnuTLS recv error (-110)`                                           | GitHub 的 git 通道被 RST                                                                | 见下方调优                                                                      |
+| `Cannot get .../git-repo/clone.bundle`                               | 缺 `--repo-url`                                                                      | 加上镜像地址（见 3.2）                                                              |
+| 拉 repo 本体 404                                                        | 该路径下已无内容（实测 `404`）                                                                  | `--repo-url` 换清华源等国内源。**别直接写** `gerrit.googlesource.com`**，国内多数网络 443 不通** |
+| `-u` 指向 github 时卡住                                                   | `github.com` 直连抖动（实测偶发 20 s 无响应）                                                    | 换网络/代理后重试                                                                  |
+| `repo sync` 拉子仓库极慢或中断                                                | 13 个子仓库直连 `github.com`，链路抖动                                                         | 直接重跑（断点续传）；调小 `-j` 减少并发；**有需要**配 `insteadOf` 中转                            |
+| `Cannot initialize work tree` / `不是 Git 仓库：'.repo/projects/xxx.git'` | `.repo/project-objects/` 里留了空壳目录（只有 `objects/`，没有 `config`/`HEAD`），git 不认、repo 又不重建 | 两处目录一起删再 sync                                                              |
+| `Repo command failed: UpdateManifestError`                           | 清单半成品损坏                                                                             | `rm -rf ~/LubanCat_SDK/.repo/manifests*` 后重跑 init                          |
+| `Current user is not the owner of SDK source`                        | 之前用 root 跑过                                                                         | `sudo chown -h -R $USER:$USER ~/LubanCat_SDK`                              |
 
 网络被 RST 时先做调优再重试：
 
@@ -893,7 +897,6 @@ git config --global http.version HTTP/1.1
 | --- | --- | --- |
 | `Please move SDK source code into an ext4 partition` | SDK 在 NTFS/exFAT/网络盘 | 挪到 ext4（见 1.1） |
 | `Your python2 is missing for U-Boot` | 只检查命令存在 | 建 shim（见 2.2） |
-| `Your python-is-python3 is missing` | 缺 `python` 命令 | `apt install python-is-python3` |
 | `Unable to find the ncurses libraries` | GCC 15 的 C23 默认 | `HOST_EXTRACFLAGS="-Wno-implicit-int"`（见 4.7） |
 | `Your display is too small to run Menuconfig!` | 终端不足 19 行 × 80 列 | 拉高终端，或跳过 menuconfig 直接改文件 |
 | `ERROR: No 'dtc'` | 缺 device-tree-compiler | `apt install device-tree-compiler` |
@@ -1004,8 +1007,6 @@ rm -f ~/LubanCat_SDK/ubuntu24.04/ubuntu-base-xfce-arm64-*.tar.gz
 | 现象                                                         | 原因                              | 解法                                                                          |
 | ---------------------------------------------------------- | ------------------------------- | --------------------------------------------------------------------------- |
 | `rkdeveloptool` 报 `command is invalid!`                    | 该分支没有烧整包命令                      | 改用 `upgrade_tool UF`（见 7.3）                                                 |
-| 烧写"1 秒就成功"                                                 | `ul` 只是写 loader                 | 同上                                                                          |
-| `du -sh output/firmware/*` 全是 0                            | 全是软链，`du` 不跟随                   | 加 `-L`（见 7.1）                                                               |
 | 上电卡在 `(initramfs)`，报 `unsupported feature(s): FEATURE_C12` | 目标系统 `e2fsck` 不认识 `orphan_file` | 见 6.4。**已进 initramfs 后** `fsck.ext4 -y` **救不了**，只能修镜像重烧                     |
 | 桌面黑屏只有鼠标指针                                                 | 多为 Mali 库与内核版本不匹配               | ① 先用 lite 版验证基础显示；② 确认 `/lib/modules/` 目录名与内核版本一致；③ 检查 GPU 驱动与 `libmali` 版本 |
 
@@ -1055,15 +1056,21 @@ wget -c https://mirrors.tuna.tsinghua.edu.cn/ubuntu-cdimage/ubuntu-base/releases
 - 鲁班猫通用 SDK manifests：<https://github.com/LubanCat/manifests>
 - 野火在线文档《嵌入式 Linux 镜像构建与部署——基于 LubanCat-RK 系列板卡》：<https://doc.embedfire.com/linux/rk356x/build_and_deploy/zh/latest/index.html>
 - repo 工具清华镜像（实测可用，脚本默认）：<https://mirrors.tuna.tsinghua.edu.cn/git/git-repo>
-- repo 工具中科大镜像：<https://mirrors.ustc.edu.cn/aosp/git-repo>（实测返回 404，仅作兜底）
+- repo 工具中科大镜像：<https://mirrors.ustc.edu.cn/aosp/git-repo>
 - repo 工具官方源（仅作说明，国内直连 443 不通）：<https://gerrit.googlesource.com/git-repo>
-- github 中转站：<https://gh-proxy.com>。**实测对** `repo` **的 git 协议不可靠**（拉小文件能到 4.9 MB/s，`git fetch` 却常 0 MB；且隔一小时复验已超时），本文不采用
+- github 中转站：<https://gh-proxy.com>。
 - ext4 `orphan_file` 特性说明（e2fsprogs 1.47.0 引入）：<https://ext4.wiki.kernel.org/index.php/Ext4_Disk_Layout>
 - 瑞芯微烧写工具 `upgrade_tool`：SDK 内 `tools/linux/Linux_Upgrade_Tool/`
 
 ---
 
 ## 附：配套自动化脚本和镜像
+
+仓库在[qianzhongyang/lubancat-rk3568-image-build](https://github.com/qianzhongyang/lubancat-rk3568-image-build/tree/ubuntu/noble) 
+
+镜像发布页：[LubanCat-2 Ubuntu 24.04 XFCE 中文版 20261128](https://github.com/qianzhongyang/lubancat-rk3568-image-build/releases/tag/ubutnu24.04-xfce-cn-20261128)
+
+国内下载镜像：[lubancat2-ubuntu24.04-xfce-cn-20261128-update.img.zst](https://gh-proxy.com/https://github.com/qianzhongyang/lubancat-rk3568-image-build/releases/download/ubutnu24.04-xfce-cn-20261128/lubancat2-ubuntu24.04-xfce-cn-20261128-update.img.zst)
 
 本仓库 `scripts/` 目录下的三个脚本是本文命令的自动化封装，**与章节严格对应**：
 
@@ -1079,14 +1086,13 @@ wget -c https://mirrors.tuna.tsinghua.edu.cn/ubuntu-cdimage/ubuntu-base/releases
 cd ~/rk3568
 ./scripts/01-install-deps.sh
 ./scripts/02-fetch-sdk.sh
-./scripts/03-build-ubuntu24.sh        # rootfs 阶段需 sudo，建议真实终端里跑
+./scripts/03-build-ubuntu24.sh        # rootfs 阶段需 sudo，建议按 6.3 手工配置免密
 ```
 
 第三个脚本的开关：
 
 ```bash
 DESKTOP=lite ./scripts/03-build-ubuntu24.sh   # 无桌面版
-KERNEL=5.10  ./scripts/03-build-ubuntu24.sh   # 换 5.10 内核
 DO_BUILD=0   ./scripts/03-build-ubuntu24.sh   # 只改配置不编译，用于复核
 ```
 

@@ -12,3 +12,6 @@ LubanCat_SDK/
 .idea/
 *.swp
 .DS_Store
+
+# 其他
+update/
