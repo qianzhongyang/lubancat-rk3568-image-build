@@ -8,8 +8,8 @@ MANIFEST="${MANIFEST:-lubancat_linux_generic.xml}"
 BRANCH="${BRANCH:-linux}"
 JOBS="${JOBS:-4}"
 RETRY="${RETRY:-3}"
-REPO_URL_MIRROR="https://mirrors.ustc.edu.cn/aosp/git-repo"
-REPO_URL_FALLBACK="https://mirrors.tuna.tsinghua.edu.cn/git/git-repo"
+REPO_URL_MIRROR="https://mirrors.tuna.tsinghua.edu.cn/git/git-repo"
+REPO_URL_FALLBACK="https://mirrors.ustc.edu.cn/aosp/git-repo"
 MANIFEST_URL="https://github.com/LubanCat/manifests.git"
 
 info() { printf '\033[36m==> %s\033[0m\n' "$*"; }
@@ -38,6 +38,15 @@ git config --global http.lowSpeedLimit 0
 git config --global http.lowSpeedTime 999999
 git config --global http.version HTTP/1.1
 
+# gh-proxy 之类的 insteadOf 中转对 repo 不可靠：实测会让 lubancat-bin / prebuilts
+# 的对象库下成半成品，报 "Cannot initialize work tree" / "不是 Git 仓库"。
+# 这里只提示、不自动改用户的全局配置。
+if git config --global --get-regexp '^url\..*\.insteadof' >/dev/null 2>&1; then
+  warn "检测到全局 git 中转改写（insteadOf），repo sync 很可能因此失败："
+  git config --global --get-regexp '^url\..*\.insteadof' | sed 's/^/    /'
+  warn "如无必要请撤掉：git config --global --remove-section 'url.<前缀>'"
+fi
+
 # ---------- 3. 目录与权限 ----------
 mkdir -p "$SDK_DIR"
 case "$(findmnt -fnu -o FSTYPE -T "$SDK_DIR" 2>/dev/null)" in
@@ -59,7 +68,7 @@ cd "$SDK_DIR"
 # ---------- 4. repo init ----------
 if [ ! -f .repo/manifest.xml ]; then
   info "repo init ($MANIFEST)"
-  # 先试中科大（路径是 /aosp/git-repo），失败再回退清华
+  # 清华镜像实测可用（200）；中科大 /aosp/git-repo 现在返回 404，只作兜底
   INIT_OK=0
   for url in "$REPO_URL_MIRROR" "$REPO_URL_FALLBACK"; do
     info "使用 repo-url: $url"
@@ -80,7 +89,7 @@ else
 fi
 
 # ---------- 5. repo sync ----------
-info "repo sync -c -j$JOBS（约 12 GB，可中断续传）"
+info "repo sync -c -j$JOBS（约 18 GB：.repo 元数据约 10 GB + 检出约 8 GB，可中断续传）"
 for i in $(seq 1 "$RETRY"); do
   if .repo/repo/repo sync -c -j"$JOBS"; then
     SYNC_OK=1; break
@@ -101,9 +110,9 @@ if [ "${SYNC_OK:-0}" != 1 ]; then
   # 3) 有代理时
   export https_proxy=http://127.0.0.1:7890 http_proxy=http://127.0.0.1:7890
 
-  # 4) 彻底重来
+  # 3) 彻底重来
   rm -rf .repo && repo init --depth=1 \
-      --repo-url https://mirrors.ustc.edu.cn/aosp/git-repo \
+      --repo-url https://mirrors.tuna.tsinghua.edu.cn/git/git-repo \
       -u https://github.com/LubanCat/manifests.git -b linux -m lubancat_linux_generic.xml
 EOF
   exit 1
@@ -116,4 +125,4 @@ fi
 info "SDK 拉取完成"
 ls -1 | head -20
 echo
-info "下一步：scripts/03-build-ubuntu22.sh"
+info "下一步：scripts/03-build-ubuntu24.sh"

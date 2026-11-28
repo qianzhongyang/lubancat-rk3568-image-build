@@ -30,7 +30,7 @@ sudo apt install -y \
   flex bison bc lz4 m4 expect \
   patchelf chrpath gawk texinfo diffstat \
   live-build fakeroot cmake gcc-multilib g++-multilib \
-  unzip libncurses-dev \
+  unzip libncurses-dev pkgconf \
   python-is-python3 python3 python3-pip python3-pyelftools dpkg-dev \
   rsync cpio debootstrap u-boot-tools 7zip locales \
   libgmp-dev libmpc-dev libelf-dev uuid-dev \
@@ -104,7 +104,7 @@ printf '  %-22s %s\n' "binfmt aarch64" \
 GCC_MAJOR=$(gcc -dumpversion 2>/dev/null | cut -d. -f1)
 if [ "${GCC_MAJOR:-0}" -ge 15 ] 2>/dev/null; then
   printf '  %-22s %s\n' "ncurses 检测" \
-    "GCC ${GCC_MAJOR}，menuconfig 需加 HOST_EXTRACFLAGS=-Wno-implicit-int（见 README 3.3）"
+    "GCC ${GCC_MAJOR}，menuconfig 需加 HOST_EXTRACFLAGS=-Wno-implicit-int（见 README 4.7）"
 else
   printf '  %-22s %s\n' "ncurses 检测" "GCC ${GCC_MAJOR:-?}，无 C23 问题"
 fi

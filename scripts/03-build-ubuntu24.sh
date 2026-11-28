@@ -35,7 +35,7 @@ if ! echo ":$PATH:" | grep -q ":$HOME/bin:"; then
   export PATH="$HOME/bin:$PATH"
 fi
 
-# 关键工具检查（对应 README 第 11 节记录的踩坑）
+# 关键工具检查（对应 README 第一、二章的环境准备）
 MISSING=""
 for t in dtc fdtget flex bison lz4 python3; do
   command -v "$t" >/dev/null 2>&1 || MISSING="$MISSING $t"
@@ -56,7 +56,7 @@ info "切换板级配置: $CHIP / $DEFCONFIG_NAME"
 ./build.sh "chip:${CHIP}:${DEFCONFIG_NAME}" >/tmp/lbc-chip.log 2>&1 || {
   warn "切换失败，可用 defconfig 列表："
   ls "device/rockchip/.chips/${CHIP}/" 2>/dev/null | grep defconfig
-  die "参见 README 第 6 章"
+  die "参见 README 4.1"
 }
 
 [ -f "$DEFCONFIG" ] || die "defconfig 不存在: $DEFCONFIG"
@@ -198,7 +198,7 @@ cleanup_stale_mounts() {
 }
 
 # 关键：mk-base-ubuntu.sh 结尾的 `sudo umount` 若因密码超时失败，
-# 脚本不检查返回值就 `sudo tar`，会把宿主机 /proc 打进包里（见 README 8.6）。
+# 脚本不检查返回值就 `sudo tar`，会把宿主机 /proc 打进包里（见 README 9.3）。
 # 这里提前认证并校验 sudo 可用，避免 rootfs 白跑 60~90 分钟。
 ensure_sudo() {
   if ! sudo -n true 2>/dev/null; then
@@ -225,7 +225,7 @@ run_step() {
 # 关于 orphan_file：Ubuntu 24.04 自带的 e2fsck 是 1.47.0，已认识 orphan_file（FEATURE_C12），
 # 理论上可以保留默认值。这里仍显式关闭，是为了让同一套脚本在 22.04 / 24.04 上通用，
 # 且关闭只损失一个性能优化项，对功能没有影响（见 README 第九章）。
-# 治本：编译 rootfs 之前先把 mk-image.sh 的 mkfs.ext4 参数固定住（见 README 9.5）。
+# 治本：编译 rootfs 之前先把 mk-image.sh 的 mkfs.ext4 参数固定住（见 README 6.4）。
 patch_mk_image() {
   local f="$SDK_DIR/ubuntu24.04/mk-image.sh"
   [ -f "$f" ] || { warn "未找到 mk-image.sh，跳过"; return 0; }
@@ -241,7 +241,7 @@ patch_mk_image() {
     bash -n "$f" || { warn "补丁后语法有误，已放弃"; return 1; }
     info "已修正 mk-image.sh：mkfs.ext4 不再生成 orphan_file"
   else
-    warn "mk-image.sh 的 mkfs.ext4 行格式不同，请手动按 README 9.5 处理"
+    warn "mk-image.sh 的 mkfs.ext4 行格式不同，请手动按 README 6.4 处理"
     return 0
   fi
 }
@@ -268,7 +268,7 @@ if [ "$MODE" = "all" ]; then
   cleanup_stale_mounts
   time ./build.sh || die "编译失败，见 output/log/latest/"
 else
-  # 治本：编译 rootfs 之前先固定 mkfs.ext4 的 ext4 特性（见 README 9.5）
+  # 治本：编译 rootfs 之前先固定 mkfs.ext4 的 ext4 特性（见 README 6.4）
   run_step "修正 mk-image.sh（关闭 orphan_file）" patch_mk_image
   run_step "loader (u-boot/trust/MiniLoaderAll)" ./build.sh loader
   run_step "kernel (6.1 + dtb + extboot.img)"    ./build.sh kernel
